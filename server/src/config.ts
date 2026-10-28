@@ -1,12 +1,19 @@
 // Server configuration, all from environment variables (see .env.example).
 
 import {randomBytes} from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // When compiled, this file lives in dist/src; step back out of dist.
 const SERVER_DIR = path.basename(ROOT) === 'dist' ? path.dirname(ROOT) : ROOT;
+
+// A server/.env file, if present, fills in variables not already set.
+const ENV_FILE = path.join(SERVER_DIR, '.env');
+if (fs.existsSync(ENV_FILE) && process.env.CAPTAIN_IGNORE_ENV_FILE !== '1') {
+    process.loadEnvFile(ENV_FILE);
+}
 
 function env(name: string, fallback = ''): string {
     return (process.env[name] ?? fallback).trim();

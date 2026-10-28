@@ -285,7 +285,7 @@ function ThreadView({channelId, postId, onBack}: {channelId: string; postId?: st
                 <span className='min-w-0 flex-1 truncate text-[13.5px] font-bold text-ink'>{channelTitle(channel, me?.id, users)}</span>
                 <button type='button' onClick={() => void openDashboard(channelId)} className='text-[12px] font-semibold text-accent-text hover:underline'>Open in dashboard</button>
             </div>
-            <div ref={scroller} className='scroll-quiet max-h-[300px] overflow-y-auto rounded-2xl bg-surface/70 px-2.5 pb-3 ring-1 ring-line'>
+            <div ref={scroller} className='scroll-quiet max-h-[380px] overflow-y-auto rounded-2xl bg-surface/70 px-2.5 pb-3 ring-1 ring-line'>
                 {!loaded && <div className='py-8 text-center text-[12.5px] text-muted'>Loading…</div>}
                 {context.map((p) => <MessageRow key={p.id} post={p} compact/>)}
             </div>

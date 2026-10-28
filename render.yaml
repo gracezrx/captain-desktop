@@ -1,0 +1,43 @@
+# Render Blueprint: the Captain server (Docker) with a persistent disk for
+# uploads, and a managed Postgres. Set the secret values in the dashboard.
+services:
+  - type: web
+    name: captain
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /readyz
+    disk:
+      name: captain-files
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: captain-db
+          property: connectionString
+      - key: APP_SECRET
+        generateValue: true
+      - key: PUBLIC_URL
+        sync: false # e.g. https://captain.example.com (used in invite links)
+      - key: CORS_ORIGINS
+        value: tauri://localhost,http://tauri.localhost
+      - key: OPEN_SIGNUP
+        value: "true"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+
+databases:
+  - name: captain-db
+    plan: basic-256mb
+    databaseName: captain

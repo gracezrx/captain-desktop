@@ -52,6 +52,14 @@ function plan(system: string, ask: string): string {
     return JSON.stringify({mode: 'plan', goal: ask.slice(0, 140), steps});
 }
 
+function short(text: string, max: number): string {
+    if (text.length <= max) {
+        return text;
+    }
+    const cut = text.slice(0, max);
+    return `${cut.slice(0, Math.max(cut.lastIndexOf(' '), max / 2))}…`;
+}
+
 function reply(system: string, messages: ChatMessage[], ask: string): string {
     const lastToolResult = messages.at(-1)?.role === 'tool' ? textOf(messages.at(-1)) : '';
     if (lastToolResult) {
@@ -69,7 +77,7 @@ function reply(system: string, messages: ChatMessage[], ask: string): string {
     if (/ROLE: SYNTHESIS/.test(system)) {
         const parts = [...system.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
         return [
-            `Here's where the team landed on **${ask.slice(0, 80)}**:`,
+            `Here's where the team landed on **${short(ask, 80)}**:`,
             '',
             ...parts.map((p) => `- **${p}**: covered above in the thread.`),
             '',
@@ -81,7 +89,7 @@ function reply(system: string, messages: ChatMessage[], ask: string): string {
         return [
             `**${title}**`,
             '',
-            `- Main point for "${ask.slice(0, 60)}": start with the outcome people care about most.`,
+            `- Main point for "${short(ask, 60)}": start with the outcome people care about most.`,
             '- Supporting detail: two or three concrete examples make it credible.',
             '- Open question: who signs off before anything goes out?',
         ].join('\n') + NOTE;
@@ -90,7 +98,7 @@ function reply(system: string, messages: ChatMessage[], ask: string): string {
     if (/^(hi|hey|hello|thanks|thank you)\b/i.test(ask)) {
         return `Hi! I'm ${name}. Ask me anything, or mention @captain with a bigger task and I'll bring in the team.${NOTE}`;
     }
-    return `Here's a first take on "${ask.slice(0, 120)}":\n\n- Start from the outcome you want and who it's for.\n- Pick the one or two moves that matter most this week.\n- I can turn this into a plan with the other agents: mention @captain.${NOTE}`;
+    return `Here's a first take on "${short(ask, 120)}":\n\n- Start from the outcome you want and who it's for.\n- Pick the one or two moves that matter most this week.\n- I can turn this into a plan with the other agents: mention @captain.${NOTE}`;
 }
 
 export async function demoCompletion(opts: CallOptions): Promise<CallResult> {

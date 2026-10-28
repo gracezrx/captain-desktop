@@ -1,0 +1,39 @@
+# Run Captain on one machine: Postgres + the Captain server (API, web app,
+# real time and agent workers in one process).
+#
+#   cp server/.env.example .env      # then fill in APP_SECRET and a model key
+#   docker compose up -d --build
+#   open http://localhost:8080
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: captain
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-captain}
+      POSTGRES_DB: captain
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U captain"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  captain:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://captain:${POSTGRES_PASSWORD:-captain}@postgres:5432/captain
+    ports:
+      - "8080:8080"
+    volumes:
+      - files:/data
+
+volumes:
+  pgdata:
+  files:

@@ -1,107 +1,117 @@
 # Captain Desktop
 
-A lightweight Mac app for Captain group chats, where your team, AI agents and models work together. It has two parts: a dashboard window, and a frosted panel that drops down from the menu bar. Press **⌥⇧Space** from anywhere to write to any chat, attach a screen snapshot, talk instead of type, and approve what an agent wants to do without opening the dashboard.
+Captain is a group chat where your team and its AI agents work together. Ask **@captain** for something big and it:
 
-The chat backend is a stock, unmodified [Mattermost](https://github.com/mattermost/mattermost) server. Captain's agents join it as bot accounts through a small Node service, the **Captain bridge**.
+- plans the work
+- hands each part to the right agent and the right model
+- runs the parts in parallel
+- posts one answer
+
+Anything that leaves the workspace, such as an email, waits for a person to approve it.
+
+It comes in three parts:
+
+- **A Mac app**: a dashboard window, plus a frosted panel that drops down from the menu bar. Press **⌥⇧Space** anywhere to write to any chat, snap your screen, talk instead of type, or approve what an agent wants to do.
+- **A web app** with the same interface, so testers can use a browser.
+- **A server** that does everything else: accounts, workspaces, chat, real time, model routing and multi-agent orchestration.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
-| Write from the menu bar | Decide in place |
+| Agents work in threads, and ask before acting | Decide from the menu bar |
 | --- | --- |
-| ![Panel: write](docs/screenshots/panel-write.png) | ![Panel: decision](docs/screenshots/panel-decision.png) |
+| ![Thread with a decision](docs/screenshots/thread-decision.png) | ![Panel: decision](docs/screenshots/panel-decision.png) |
 
-## What's in this repo
+| Write from anywhere | What needs you |
+| --- | --- |
+| ![Panel: write](docs/screenshots/panel-write.png) | ![Panel: inbox](docs/screenshots/panel-inbox.png) |
+
+## What it does
+
+- **Workspaces and people**
+  - Sign up, sign in, and invite people with links.
+  - Roles: owner, admin, member, guest.
+  - One account can belong to several workspaces.
+- **Chat**
+  - Channels (public or private), direct messages and threads.
+  - Reactions, files and screenshots, search.
+  - Unread counts and mentions.
+  - Real-time updates that survive reconnects.
+- **Agents**
+  - Five built-in agents: Captain, Researcher, Writer, Analyst and Designer.
+  - Admins can add and edit agents: instructions, tools, difficulty tier, a pinned model.
+  - Mention an agent with `@`, or message it directly.
+- **Orchestration**
+  - Captain answers directly, or splits the work into steps for the specialists.
+  - Steps run in parallel when they can; later steps receive earlier results.
+  - A live plan card shows progress and has a Stop button.
+  - Steps can hand questions to each other.
+  - Agent replies stream in as they're written.
+- **Approvals**
+  - Email, and anything an agent marks as needing sign-off, becomes a decision card.
+  - The work pauses and resumes exactly where it stopped, after Approve or Reject.
+- **Model routing**, following Captain's Smart Router:
+  - Three difficulty tiers, with priorities, vision and tool support.
+  - Several provider routes per model, falling back automatically, and skipping models that keep failing.
+  - Monthly budgets and a cost ledger per workspace.
+- **Mac-only features**
+  - menu bar panel and global shortcut
+  - screen and region snapshots
+  - voice typing (English or Chinese)
+  - banners that open the right thread
+  - the session kept in the Keychain
+
+## Run it
+
+```bash
+createdb captain
+cd server && npm install && npm run dev        # API on :8080, migrations run automatically
+cd desktop && npm install && npm run dev       # app on http://localhost:1420
+```
+
+Create an account in the browser. With no model key set, agents answer in **demo mode**, so plans, approvals and documents still work. For real answers, put `OPENROUTER_API_KEY=…` (or any provider key) in `server/.env` and restart.
+
+- **Deploying**: Docker Compose, Render, all settings, and building and signing the Mac app are in [docs/DEPLOY.md](docs/DEPLOY.md).
+- **How it's built**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Product choices to review**: [DECISIONS.md](DECISIONS.md).
+
+## Repo
 
 | Folder | What it is | Stack |
 | --- | --- | --- |
-| `desktop/` | The Mac app: dashboard window, menu bar panel, native core | Tauri 2 (Rust), React 19, Tailwind 4, `@mattermost/client` |
-| `bridge/` | Runs Captain's agents as Mattermost bots: answers mentions and DMs, reads screenshots, turns risky actions into decision cards, handles Approve / Reject | Node 22, TypeScript, `ws` |
-| `server/` | Docker Compose for Mattermost + Postgres + bridge, and a one-time setup script | Docker |
-| `dev/` | A stand-in Mattermost server for UI work without Docker | Node |
+| `server/` | The backend: REST API, WebSocket, job workers, model router, agents. Also serves the web app. | Node 22, TypeScript, Fastify, Postgres (postgres.js), zod |
+| `server/config/models.json` | The model catalog: tiers, priorities, prices, provider routes. | |
+| `server/test/` | Integration tests against a real Postgres and scripted model providers. | `node:test` |
+| `desktop/` | The app: dashboard, menu bar panel, native core. | Tauri 2 (Rust), React 19, Tailwind 4, Zustand |
+| `Dockerfile`, `docker-compose.yml`, `render.yaml` | One image with the API and the web app; Compose and Render setups. | |
 
-## How it works
-
-```
- Your Mac                                   Server (Docker)
-┌──────────────────────────────┐          ┌───────────────────────────────┐
-│ Menu bar icon  ⌥⇧Space        │          │ Mattermost (unchanged)         │
-│ ┌──────────┐  ┌────────────┐ │  REST +   │  posts, threads, files, bots,  │
-│ │Dashboard │  │ Menu bar   │ │ WebSocket │  real-time events, Postgres    │
-│ │ window   │  │ panel      │ ├──────────►│                                │
-│ └────┬─────┘  └─────┬──────┘ │           └──────┬───────────────▲─────────┘
-│      └─ one connection ─┘     │       bot events │               │ button callbacks
-│ Rust core: tray, hotkey,      │                  ▼               │
-│ snapshot, banners, Keychain   │           ┌──────────────────────┴───┐
-└──────────────────────────────┘           │ Captain bridge (agents)   │──► any OpenAI-compatible
-                                           └──────────────────────────┘    model (Captain's router)
-```
-
-- The dashboard window holds the app's one WebSocket to Mattermost, even when it's closed (it hides). It relays events to the panel, raises banners, and sets the count next to the menu bar icon.
-- An agent's reply that ends with a `DECISION: {...}` line becomes a **decision card**: a post of type `custom_captain_decision` with Approve / Reject buttons. A click goes from Mattermost to the bridge's `/actions` endpoint, which rewrites the card for everyone (for example "Approved by Grace · 11:02"). The agent then follows up.
-- Agents don't answer other agents, so two bots can't loop.
-
-## Try the UI in a browser (no Mac build, no Docker)
+## Tests
 
 ```bash
-cd dev && npm install && npm start          # mock Mattermost on :8065
-cd desktop && npm install && npm run dev    # http://localhost:1420
+cd server && npm test     # needs a captain_test database
 ```
 
-Sign in as `grace` / `captain`. The panel is at http://localhost:1420/panel.html. In a browser, the snapshot button draws a placeholder image, since only the Mac app can capture the screen.
+The 37 tests cover:
 
-To try the real bridge against the mock, start the mock with `npm start -- --bridge`, then:
+- accounts, invites and roles
+- private channels and DMs
+- threads, unread counts and file links
+- WebSocket replay after a reconnect
+- plans with parallel steps, approvals (who may decide, approve, reject, expire), stopping a run
+- routing by tier, fallback and the circuit breaker
+- streaming and tool calls
+- vision routing, budgets
+- the job queue's retries and recovery
 
-```bash
-cd bridge && npm install
-AGENT_TOKENS="captain=bot-captain,researcher=bot-researcher,designer=bot-designer" npm start
-```
+## Background
 
-## Run the real backend
+Captain started on Mattermost. This version keeps Mattermost's design and uses none of its code. What we kept:
 
-Needs Docker Desktop and Node 22.
+- the API → app → store layers
+- numbered migrations
+- the WebSocket protocol with sequence numbers and replay
+- bots as users
+- hooks before and after a message is saved
+- buttons on messages
+- unread counters on the channel membership
 
-```bash
-cd server
-cp .env.example .env      # set the passwords, BRIDGE_SECRET, and your model endpoint
-./start.sh                # Mattermost + Postgres, one-time setup, then the bridge
-```
-
-`setup.mjs` creates the admin account, a team, `#launch-room` and `#design-review`, and the `@captain`, `@researcher` and `@designer` bots. It also writes the bots' tokens to `.env`. To use real models, point `LLM_BASE_URL` / `LLM_API_KEY` at any OpenAI-compatible endpoint, such as Captain's router. Without one, the agents give placeholder replies.
-
-## Run the Mac app
-
-Needs macOS 13+, Xcode Command Line Tools (`xcode-select --install`), [Rust](https://rustup.rs) and Node 22.
-
-```bash
-cd desktop
-npm install
-npm run tauri dev         # development build with hot reload
-npm run tauri build       # Captain.app and a .dmg in src-tauri/target/release/bundle/
-```
-
-On first use, macOS asks for **Screen Recording** (snapshots), **Microphone** and **Speech Recognition** (voice typing), and **Notifications**. Sign in with your server's address, for example `http://localhost:8065`.
-
-| Shortcut | Does |
-| --- | --- |
-| ⌥⇧Space | Open the panel ready to write (press again to close) |
-| Click the menu bar icon | Open the panel's inbox: what needs you |
-| Camera button · ⌥-click | Snapshot the screen · drag a region instead |
-| Hold ⌥ while typing, or hold the mic | Talk; let go to stop. Tap the mic for hands-free |
-| ⏎ · ⇧⏎ · Esc | Send · new line · close (your draft is kept) |
-
-## Status
-
-Verified in this build:
-- The dashboard and panel UI, driven in Chromium against the mock server. Covered: sign-in, chat list, unread and mention counts, sending text, snapshot upload, real-time delivery, the inbox, decision cards, and Approve.
-- The bridge against the mock, with a stand-in model. Covered: replies in threads, reading attachments, creating decision cards from a `DECISION:` line, Approve / Reject through the callback, and refusing callbacks with the wrong secret.
-- The Rust core compiles (`cargo check`) on Linux, and its macOS-only calls were checked against the crates' sources.
-
-Not yet run, and the first things to check on a Mac:
-- The native Mac pieces: the frosted panel under the menu bar icon, ⌥⇧Space, snapshots, clicking a banner to open its thread, and the Keychain.
-- Voice typing inside the Mac app. It uses WebKit's speech recognition. If WebKit doesn't offer it, the plan is a small native bridge to Apple's Speech framework, with ElevenLabs as an opt-in.
-- `server/setup.mjs` and the Compose stack against a live Mattermost. The mock doesn't implement the admin endpoints.
-- The panel uses a standard always-on-top window. Floating over full-screen apps may need a native panel window (`tauri-nspanel`).
-
-## Licensing
-
-This repo doesn't copy or modify Mattermost's server code. Mattermost runs unmodified as a separate server, and the app talks to it only through `@mattermost/client` and `@mattermost/types`, which are published under MIT. Check with a lawyer before relying on this for distribution; it's a reading of the licenses, not legal advice. Captain's brand assets (`desktop/public`) belong to Quest Space.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) shows where each idea lives.
