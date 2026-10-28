@@ -64,7 +64,7 @@ export function DecisionCard({post, compact = false}: {post: Post; compact?: boo
                     {decision.fields.map((f) => (
                         <div key={f.label} className='contents'>
                             <dt className='text-muted'>{f.label}</dt>
-                            <dd className={`font-medium whitespace-pre-wrap text-ink ${compact ? 'line-clamp-4' : ''}`}>{f.value}</dd>
+                            <dd className={`font-medium whitespace-pre-wrap text-ink ${compact ? 'scroll-quiet max-h-32 overflow-y-auto' : ''}`}>{f.value}</dd>
                         </div>
                     ))}
                 </dl>

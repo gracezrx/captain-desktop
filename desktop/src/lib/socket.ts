@@ -3,7 +3,7 @@
 // replay what it missed. If the server can't (too long offline), onResync
 // tells the app to reload its state instead.
 
-import {getToken, websocketUrl} from './api';
+import {getToken, sessionEnded, websocketUrl} from './api';
 import type {EventEnvelope, ServerEvent} from './types';
 
 type Handlers = {
@@ -115,7 +115,8 @@ export class Socket {
             }
             this.h.onState('offline');
             if (e.code === 4001) {
-                // The session is no longer valid; don't hammer the server.
+                // The session is no longer valid: sign out instead of retrying.
+                sessionEnded();
                 return;
             }
             const delay = Math.min(30_000, 500 * 2 ** this.attempt++) + Math.random() * 500;

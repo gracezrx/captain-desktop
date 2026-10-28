@@ -90,17 +90,23 @@ export async function changeRole(ctx: Ctx, actor: UserRow, workspaceId: string, 
 }
 
 export async function removeMember(ctx: Ctx, actor: UserRow, workspaceId: string, userId: string): Promise<void> {
-    if (actor.id !== userId) {
-        await requireWorkspaceRole(ctx.sql, workspaceId, actor.id, 'admin');
-    }
+    const actorRole = actor.id !== userId ? await requireWorkspaceRole(ctx.sql, workspaceId, actor.id, 'admin') : null;
     const current = await getMemberRole(ctx.sql, workspaceId, userId);
     if (!current) {
         throw notFound('Member');
     }
+    if (current === 'owner' && actorRole && actorRole !== 'owner') {
+        throw forbidden('Only an owner can remove an owner.');
+    }
     if (current === 'owner' && (await countOwners(ctx.sql, workspaceId)) <= 1) {
         throw badRequest('The last owner can\'t leave. Make someone else an owner first.');
     }
-    await removeWorkspaceMember(ctx.sql, workspaceId, userId);
+    await tx(ctx.sql, async (t) => {
+        await removeWorkspaceMember(t, workspaceId, userId);
+        // Their invite links stop working too, so they can't let themselves back in.
+        await t`update invites set revoked_at = ${now()} where workspace_id = ${workspaceId} and created_by = ${userId} and revoked_at is null`;
+        await t`delete from channel_members where user_id = ${userId} and channel_id in (select id from channels where workspace_id = ${workspaceId})`;
+    });
     audit(ctx.sql, {workspaceId, userId: actor.id, action: 'member_removed', target: userId});
 }
 
@@ -116,7 +122,9 @@ export async function makeInvite(ctx: Ctx, actor: UserRow, workspaceId: string, 
         throw forbidden('Only admins can invite admins.');
     }
     const token = newToken(18);
-    const days = input.expiresInDays === null ? null : input.expiresInDays ?? 14;
+    // Only admins can make links that never expire; others last at most 30 days.
+    const asked = input.expiresInDays === null ? null : input.expiresInDays ?? 14;
+    const days = atLeast(actorRole, 'admin') ? asked : Math.min(asked ?? 14, 30);
     const invite = await createInvite(ctx.sql, {
         workspaceId, tokenHash: sha256(token), role, createdBy: actor.id,
         expiresAt: days === null ? null : now() + days * 86_400_000,
@@ -149,6 +157,11 @@ export async function previewInvite(ctx: Ctx, token: string): Promise<InvitePrev
 export async function acceptInvite(ctx: Ctx, user: UserRow, token: string): Promise<Workspace> {
     const invite = await getInviteByHash(ctx.sql, sha256(token));
     if (!invite || !inviteUsable(invite)) {
+        throw badRequest('This invite link has expired or been used up. Ask for a new one.', 'invite_invalid');
+    }
+    // The person who made the link must still be allowed to invite with it.
+    const creatorRole = await getMemberRole(ctx.sql, invite.workspaceId, invite.createdBy);
+    if (!creatorRole || creatorRole === 'guest' || (invite.role === 'admin' && !atLeast(creatorRole, 'admin'))) {
         throw badRequest('This invite link has expired or been used up. Ask for a new one.', 'invite_invalid');
     }
     const existing = await getMemberRole(ctx.sql, invite.workspaceId, user.id);

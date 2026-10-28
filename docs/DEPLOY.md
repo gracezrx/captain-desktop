@@ -71,6 +71,8 @@ Optional:
 | `TAVILY_API_KEY` or `BRAVE_SEARCH_API_KEY` | Web search for agents. |
 | `SMTP_URL`, `MAIL_FROM` | Agents send real email after approval. |
 | `OPEN_SIGNUP=false` | Invite-only. |
+| `TRUST_PROXY=1` | Behind one load balancer (Render, Fly, Railway). Leave `false` when the server is exposed directly. |
+| `EMAIL_DAILY_LIMIT` | Email recipients per workspace per day (default 100). |
 | `CORS_ORIGINS` | Browser origins other than the server itself and the Mac app. |
 
 To add or reprioritize models, edit `server/config/models.json`. Check the prices there: they're estimates.
@@ -114,5 +116,6 @@ For a universal build that runs on Intel and Apple Silicon: `npm run tauri build
 ### Before inviting people you don't know
 
 - [ ] `APP_SECRET` is set and the site is on HTTPS.
+- [ ] `TRUST_PROXY` matches your setup (`1` behind one load balancer), so sign-in limits apply per real client.
 - [ ] Decide on `OPEN_SIGNUP`, and set a monthly budget per workspace (Settings → Models & spend).
 - [ ] Password reset by email doesn't exist yet. Until it does, an admin resets accounts directly in the database.

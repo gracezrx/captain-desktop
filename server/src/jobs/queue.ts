@@ -84,11 +84,20 @@ export class JobQueue {
             }
             const t = now();
             const kinds = [...this.handlers.keys()];
+            // A job whose worker kept dying (it may be what kills it) stops after its last attempt.
+            const exhausted = await this.sql`
+                update jobs set status = 'failed', last_error = 'the worker stopped responding', locked_by = null, locked_until = null, updated_at = ${t}
+                where kind = any(${kinds}) and status = 'running' and locked_until < ${t} and attempts >= max_attempts
+                returning kind, payload`;
+            for (const job of exhausted) {
+                const reg = this.handlers.get(job.kind as string);
+                await reg?.onFailed?.(job.payload as never, 'the worker stopped responding').catch((err) => log.error({err}, 'onFailed handler threw'));
+            }
             const jobs = await this.sql`
                 update jobs set status = 'running', locked_by = ${this.workerId}, locked_until = ${t + this.leaseMs}, attempts = attempts + 1, updated_at = ${t}
                 where id in (
                     select id from jobs
-                    where kind = any(${kinds}) and ((status = 'queued' and run_at <= ${t}) or (status = 'running' and locked_until < ${t}))
+                    where kind = any(${kinds}) and ((status = 'queued' and run_at <= ${t}) or (status = 'running' and locked_until < ${t} and attempts < max_attempts))
                     order by run_at limit ${free}
                     for update skip locked)
                 returning id, kind, payload, attempts, max_attempts`;
@@ -109,7 +118,15 @@ export class JobQueue {
         const ctrl = new AbortController();
         this.active.set(id, ctrl);
         const heartbeat = setInterval(() => {
-            this.sql`update jobs set locked_until = ${now() + this.leaseMs} where id = ${id} and locked_by = ${this.workerId}`.catch(() => undefined);
+            this.sql`update jobs set locked_until = ${now() + this.leaseMs} where id = ${id} and locked_by = ${this.workerId} and status = 'running'`.
+                then((r) => {
+                    if (r.count === 0) {
+                        // Our lease ran out and another worker took the job: stop.
+                        log.warn({job: kind, id}, 'lost the job lease; stopping');
+                        ctrl.abort();
+                    }
+                }).
+                catch(() => undefined);
         }, Math.max(1000, this.leaseMs / 3));
         const started = Date.now();
         try {

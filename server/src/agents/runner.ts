@@ -14,13 +14,14 @@ import type {AgentRow} from '../store/agents.js';
 import {type ChannelRow, listChannelMemberIds} from '../store/channels.js';
 import {attachFiles} from '../store/files.js';
 import {getPost, softDeletePost, updatePost} from '../store/posts.js';
-import {type ApprovalRow, createApproval, type RunRow, setApprovalPost} from '../store/runs.js';
+import {type ApprovalRow, claimApprovalExecution, createApproval, getApproval, type RunRow, setApprovalPost, setApprovalResult} from '../store/runs.js';
 import type {UserRow} from '../store/users.js';
 import {AppError} from '../util/errors.js';
 import {log} from '../util/log.js';
 
 import {withoutImageData} from './history.js';
 import {getTool, toolDefs, toolsFor} from './tools/index.js';
+import {linksIn} from './tools/web.js';
 import type {Tool, ToolContext} from './tools/types.js';
 
 export type StepState = {messages: ChatMessage[]; pending: ToolCall[]; fileIds: string[]};
@@ -149,7 +150,28 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
         ctx.hub.publish(audience ?? [], {event: 'post_deleted', data: {postId: id, channelId: channel.id}});
     };
 
-    const toolContext = (): ToolContext => ({ctx, agent, agentUser, requester, channel, run, stepId: input.stepId, threadRoot: input.threadRoot, signal: input.signal});
+    // Links a person shared, or a web search returned, in this conversation.
+    const trustedLinks = (): Set<string> => {
+        const callNames = new Map<string, string>();
+        for (const m of state.messages) {
+            if (m.role === 'assistant') {
+                for (const c of m.tool_calls ?? []) {
+                    callNames.set(c.id, c.function.name);
+                }
+            }
+        }
+        const texts: string[] = [];
+        for (const m of state.messages) {
+            if (m.role === 'user') {
+                texts.push(typeof m.content === 'string' ? m.content : m.content.map((p) => (p.type === 'text' ? p.text : '')).join('\n'));
+            } else if (m.role === 'tool' && callNames.get(m.tool_call_id) === 'web_search') {
+                texts.push(m.content);
+            }
+        }
+        return linksIn(texts.join('\n'));
+    };
+
+    const toolContext = (): ToolContext => ({ctx, agent, agentUser, requester, channel, run, stepId: input.stepId, threadRoot: input.threadRoot, signal: input.signal, trustedLinks});
 
     // Ask a person before an action with outside effects. Returns the approval.
     const askApproval = async (tool: Tool, call: ToolCall, args: Record<string, unknown>): Promise<ApprovalRow> => {
@@ -200,7 +222,7 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
                 state.messages.push({role: 'tool', tool_call_id: call.id, content: `There is no tool called ${call.function.name} available to you.`});
                 continue;
             }
-            if (tool.external) {
+            if (tool.external || tool.needsApproval?.(toolContext(), args)) {
                 return askApproval(tool, call, args);
             }
             stream(`_${(ACTIVITY[tool.name] ?? (() => `Using ${tool.name}`))(args)}…_`);
@@ -231,8 +253,14 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
             const call: ToolCall = {id: a.toolCallId ?? `call_${a.id}`, type: 'function', function: {name: a.tool, arguments: JSON.stringify(a.args)}};
             let content: string;
             if (a.status === 'approved' && tool) {
-                stream(`_${a.title}…_`);
-                content = await runTool(tool, a.args);
+                // At most once, even if this resume is retried after a crash.
+                if (await claimApprovalExecution(ctx.sql, a.id)) {
+                    stream(`_${a.title}…_`);
+                    content = await runTool(tool, a.args);
+                    await setApprovalResult(ctx.sql, a.id, content);
+                } else {
+                    content = (await getApproval(ctx.sql, a.id))?.result ?? 'This approved action was already started earlier; its result is unknown. Don\'t repeat it. Tell the person to check before trying again.';
+                }
             } else {
                 content = 'The person rejected this action, so it was not done. Don\'t try it again; say what you would do instead or ask what they want changed.';
             }

@@ -24,6 +24,8 @@ services:
         value: tauri://localhost,http://tauri.localhost
       - key: OPEN_SIGNUP
         value: "true"
+      - key: TRUST_PROXY
+        value: "1" # Render's proxy sets X-Forwarded-For
       - key: OPENROUTER_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

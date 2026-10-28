@@ -135,8 +135,10 @@ export async function cancelRun(ctx: Ctx, orchestrator: Orchestrator, user: User
 // ------------------------------------------------------------ models and spend
 
 export async function models(ctx: Ctx, user: UserRow, workspaceId: string): Promise<{models: ModelInfo[]; demoMode: boolean}> {
-    await requireWorkspaceRole(ctx.sql, workspaceId, user.id);
-    return {models: ctx.router.models(), demoMode: ctx.router.demoMode};
+    const role = await requireWorkspaceRole(ctx.sql, workspaceId, user.id);
+    // Provider errors can echo other workspaces' requests: admins see that it failed, not the text.
+    const admin = atLeast(role, 'admin');
+    return {models: ctx.router.models().map((m) => ({...m, lastError: admin && m.lastError ? m.lastError.replace(/\{[\s\S]*$/, '').slice(0, 120) : null})), demoMode: ctx.router.demoMode};
 }
 
 export async function usage(ctx: Ctx, user: UserRow, workspaceId: string): Promise<UsageSummary> {

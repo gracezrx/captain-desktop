@@ -14,6 +14,7 @@ export type ToolContext = {
     stepId: string;
     threadRoot: string | null; // where the agent's messages go
     signal: AbortSignal;
+    trustedLinks: () => Set<string>; // links people shared or a search returned in this conversation
 };
 
 export type ToolResult = {content: string; fileIds?: string[]};
@@ -26,6 +27,8 @@ export type Tool = {
     parameters: Record<string, unknown>; // JSON Schema
     // Actions with outside effects pause for a person's approval first.
     external: boolean;
+    // Some calls need approval depending on their arguments (e.g. a link nobody shared).
+    needsApproval?: (tc: ToolContext, args: Record<string, unknown>) => boolean;
     available: () => boolean;
     run: (tc: ToolContext, args: Record<string, unknown>) => Promise<ToolResult>;
     // How the approval card describes this call.

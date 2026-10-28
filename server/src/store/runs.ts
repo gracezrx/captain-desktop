@@ -33,6 +33,7 @@ export type StepRow = {
     output: string | null;
     error: string | null;
     transcript: unknown;
+    waitingApprovalId: string | null;
     postId: string | null;
     modelId: string | null;
     costUsd: number;
@@ -86,7 +87,7 @@ export async function lockRun(db: Db, id: string): Promise<RunRow | null> {
 export async function updateRun(db: Db, id: string, patch: Partial<Pick<RunRow, 'status' | 'kind' | 'goal' | 'cardPostId' | 'resultPostId' | 'error'>>): Promise<RunRow> {
     const [row] = await db`
         update runs set
-            status = coalesce(${patch.status ?? null}, status),
+            status = case when status in ('succeeded', 'failed', 'cancelled') then status else coalesce(${patch.status ?? null}, status) end,
             kind = coalesce(${patch.kind ?? null}, kind),
             goal = coalesce(${patch.goal ?? null}, goal),
             card_post_id = coalesce(${patch.cardPostId ?? null}, card_post_id),
@@ -128,10 +129,11 @@ export async function getStep(db: Db, runId: string, stepId: string): Promise<St
     return (row as unknown as StepRow) ?? null;
 }
 
-export async function updateStep(db: Db, runId: string, stepId: string, patch: Partial<Pick<StepRow, 'status' | 'output' | 'error' | 'postId' | 'modelId' | 'startedAt' | 'finishedAt'>> & {transcript?: unknown; addCost?: number}): Promise<StepRow> {
+export async function updateStep(db: Db, runId: string, stepId: string, patch: Partial<Pick<StepRow, 'status' | 'output' | 'error' | 'postId' | 'modelId' | 'startedAt' | 'finishedAt' | 'waitingApprovalId'>> & {transcript?: unknown; addCost?: number}): Promise<StepRow> {
     const [row] = await db`
         update run_steps set
-            status = coalesce(${patch.status ?? null}, status),
+            status = case when status in ('succeeded', 'failed', 'skipped', 'cancelled') then status else coalesce(${patch.status ?? null}, status) end,
+            waiting_approval_id = case when ${patch.waitingApprovalId !== undefined} then ${patch.waitingApprovalId ?? null} else waiting_approval_id end,
             output = case when ${patch.output !== undefined} then ${patch.output ?? null} else output end,
             error = case when ${patch.error !== undefined} then ${patch.error ?? null} else error end,
             post_id = coalesce(${patch.postId ?? null}, post_id),
@@ -171,10 +173,12 @@ export type ApprovalRow = {
     requestedBy: string | null;
     decidedBy: string | null;
     decidedAt: number | null;
+    executedAt: number | null;
+    result: string | null;
     createdAt: number;
 };
 
-export async function createApproval(db: Db, a: Omit<ApprovalRow, 'id' | 'status' | 'decidedBy' | 'decidedAt' | 'createdAt' | 'postId'>): Promise<ApprovalRow> {
+export async function createApproval(db: Db, a: Omit<ApprovalRow, 'id' | 'status' | 'decidedBy' | 'decidedAt' | 'createdAt' | 'postId' | 'executedAt' | 'result'>): Promise<ApprovalRow> {
     const [row] = await db`
         insert into approvals (id, workspace_id, channel_id, run_id, step_id, agent_id, tool, args, tool_call_id, title, reason, fields, status, requested_by, created_at)
         values (${newId()}, ${a.workspaceId}, ${a.channelId}, ${a.runId}, ${a.stepId}, ${a.agentId}, ${a.tool}, ${db.json(a.args as never)}, ${a.toolCallId},
@@ -199,6 +203,16 @@ export async function decideApproval(db: Db, id: string, status: 'approved' | 'r
         where id = ${id} and status = 'pending'
         returning *`;
     return (row as unknown as ApprovalRow) ?? null;
+}
+
+// The approved action runs once: whoever claims it first runs it.
+export async function claimApprovalExecution(db: Db, id: string): Promise<boolean> {
+    const r = await db`update approvals set executed_at = ${now()} where id = ${id} and status = 'approved' and executed_at is null`;
+    return r.count === 1;
+}
+
+export async function setApprovalResult(db: Db, id: string, result: string): Promise<void> {
+    await db`update approvals set result = ${result.slice(0, 20_000)} where id = ${id}`;
 }
 
 export async function listPendingApprovals(db: Db, workspaceId: string, userId: string): Promise<ApprovalRow[]> {

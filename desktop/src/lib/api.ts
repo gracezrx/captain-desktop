@@ -51,6 +51,13 @@ export function setUnauthorizedHandler(fn: () => void): void {
     onUnauthorized = fn;
 }
 
+// The session ended elsewhere (signed out, password changed): back to sign-in.
+export function sessionEnded(): void {
+    if (token) {
+        onUnauthorized?.();
+    }
+}
+
 // A file link from the server (signed, so it works in <img src>).
 export function fileUrl(f: FileInfo, download = false): string {
     return `${serverUrl}${f.url}${download ? '&download=1' : ''}`;

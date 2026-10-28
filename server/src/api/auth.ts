@@ -56,6 +56,7 @@ export function authRoutes(app: FastifyInstance, api: Api): void {
 
     app.post('/auth/logout', async (req) => {
         await logout(ctx.sql, req.token, req.sessionId);
+        ctx.hub.closeSessions([req.sessionId]);
         return {ok: true};
     });
 
@@ -72,6 +73,7 @@ export function authRoutes(app: FastifyInstance, api: Api): void {
     app.post('/users/me/password', {config: {auth: true}}, async (req) => {
         const body = z.object({current: z.string(), next: z.string()}).parse(req.body);
         await changePassword(ctx.sql, req.user, req.sessionId, body.current, body.next);
+        ctx.hub.closeUserSessions(req.user.id, req.sessionId);
         return {ok: true};
     });
 

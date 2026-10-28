@@ -79,7 +79,18 @@ export const config = {
         braveKey: env('BRAVE_SEARCH_API_KEY'),
         smtpUrl: env('SMTP_URL'), // e.g. smtps://user:pass@smtp.example.com:465
         mailFrom: env('MAIL_FROM'),
+        emailDailyLimit: int('EMAIL_DAILY_LIMIT', 100), // recipients per workspace per day
     },
+    // How many proxies sit in front of the server ("1" on Render, Fly, Railway or
+    // behind one load balancer). Client IPs come from X-Forwarded-For only that far.
+    trustProxy: (() => {
+        const v = env('TRUST_PROXY', 'false').toLowerCase();
+        if (v === 'false' || v === '0' || v === '') {
+            return false;
+        }
+        const n = Number(v);
+        return Number.isInteger(n) && n > 0 ? n : v.split(',').map((x) => x.trim());
+    })() as false | number | string[],
     rateLimit: {
         perMinute: int('RATE_LIMIT_PER_MINUTE', 600),
         authPerMinute: int('AUTH_RATE_LIMIT_PER_MINUTE', 20),

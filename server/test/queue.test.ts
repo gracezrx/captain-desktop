@@ -64,6 +64,24 @@ describe('job queue', () => {
         assert.equal(c, 1);
     });
 
+    it('gives up on a job whose workers keep dying, instead of retrying it forever', async () => {
+        const q = queue();
+        let ran = false;
+        let failed = '';
+        q.register('deadly', async () => {
+            ran = true;
+        }, {onFailed: async (_p, e) => {
+            failed = e;
+        }});
+        await sql`insert into jobs (id, kind, payload, status, run_at, attempts, max_attempts, locked_by, locked_until, created_at, updated_at)
+                  values ('deadlyjob00000000000000000', 'deadly', '{}'::jsonb, 'running', ${now() - 10_000}, 3, 3, 'dead-worker', ${now() - 1000}, ${now()}, ${now()})`;
+        await q.start();
+        await waitFor(async () => failed, 10_000, 'onFailed');
+        assert.equal(ran, false);
+        const [job] = await sql`select status from jobs where id = 'deadlyjob00000000000000000'`;
+        assert.equal(job.status, 'failed');
+    });
+
     it('picks up a job whose worker stopped heart-beating', async () => {
         const q = queue();
         let ran = false;

@@ -21,6 +21,7 @@ const SLOW_CLIENT_BYTES = 1_000_000;
 type Conn = {
     id: string;
     userId: string;
+    sessionId: string;
     ws: WebSocket | null;
     seq: number;
     buffer: EventEnvelope[];
@@ -31,7 +32,9 @@ type Conn = {
 export type PublishOptions = {droppable?: boolean; exceptConnectionId?: string};
 
 export type HubDeps = {
-    authenticate: (token: string) => Promise<string | null>; // token -> user id
+    authenticate: (token: string) => Promise<{userId: string; sessionId: string} | null>;
+    // Which of these sessions are still signed in (checked on every sweep).
+    validSessions?: (sessionIds: string[]) => Promise<Set<string>>;
     onTyping: (userId: string, channelId: string, rootId: string | null, connectionId: string) => Promise<void>;
     forward?: (userIds: string[], event: ServerEvent, opts: PublishOptions) => void; // to other nodes
 };
@@ -87,15 +90,15 @@ export class Hub {
                     ws.close(4001, 'authenticate first');
                     return;
                 }
-                const userId = await this.deps.authenticate(msg.token).catch(() => null);
-                if (!userId) {
+                const who = await this.deps.authenticate(msg.token).catch(() => null);
+                if (!who) {
                     ws.send(JSON.stringify({status: 'FAIL', seqReply: msg.seq, error: 'invalid session'}));
                     ws.close(4001, 'invalid session');
                     return;
                 }
                 authed = true;
                 clearTimeout(timer);
-                this.bind(ws, userId, msg.connectionId, msg.lastSeq);
+                this.bind(ws, who.userId, who.sessionId, msg.connectionId, msg.lastSeq);
                 return;
             }
             const conn = this.connFor(ws);
@@ -129,17 +132,18 @@ export class Hub {
         return (ws as unknown as {__conn?: Conn}).__conn;
     }
 
-    private bind(ws: WebSocket, userId: string, connectionId?: string, lastSeq?: number): void {
+    private bind(ws: WebSocket, userId: string, sessionId: string, connectionId?: string, lastSeq?: number): void {
         const previous = connectionId ? this.conns.get(connectionId) : undefined;
         let conn: Conn;
         let replayed = false;
         if (previous && previous.userId === userId && !previous.ws && typeof lastSeq === 'number' && this.canReplay(previous, lastSeq)) {
             conn = previous;
             conn.ws = ws;
+            conn.sessionId = sessionId;
             conn.disconnectedAt = null;
             replayed = true;
         } else {
-            conn = {id: newId(), userId, ws, seq: 0, buffer: [], alive: true, disconnectedAt: null};
+            conn = {id: newId(), userId, sessionId, ws, seq: 0, buffer: [], alive: true, disconnectedAt: null};
             this.conns.set(conn.id, conn);
             const set = this.byUser.get(userId) ?? new Set();
             set.add(conn.id);
@@ -202,8 +206,52 @@ export class Hub {
         }
     }
 
+    // Sign-outs: close the sockets of these sessions on this server, for good.
+    closeSessions(sessionIds: string[]): void {
+        const ids = new Set(sessionIds);
+        for (const c of [...this.conns.values()]) {
+            if (ids.has(c.sessionId)) {
+                this.forget(c, 'signed out');
+            }
+        }
+    }
+
+    closeUserSessions(userId: string, exceptSessionId?: string): void {
+        for (const id of [...(this.byUser.get(userId) ?? [])]) {
+            const c = this.conns.get(id);
+            if (c && c.sessionId !== exceptSessionId) {
+                this.forget(c, 'signed out');
+            }
+        }
+    }
+
+    private forget(c: Conn, reason: string): void {
+        c.ws?.close(4001, reason);
+        c.ws = null;
+        this.conns.delete(c.id);
+        const set = this.byUser.get(c.userId);
+        set?.delete(c.id);
+        if (set && !set.size) {
+            this.byUser.delete(c.userId);
+        }
+    }
+
+    // Sessions ended on another server (or expired): close their sockets here too.
+    private async revalidate(): Promise<void> {
+        if (!this.deps.validSessions || !this.conns.size) {
+            return;
+        }
+        const ids = [...new Set([...this.conns.values()].map((c) => c.sessionId))];
+        const valid = await this.deps.validSessions(ids).catch(() => null);
+        if (!valid) {
+            return;
+        }
+        this.closeSessions(ids.filter((id) => !valid.has(id)));
+    }
+
     // Ping live sockets; forget connections gone longer than the replay window.
     private sweep(): void {
+        void this.revalidate();
         const t = Date.now();
         for (const c of this.conns.values()) {
             if (c.ws) {

@@ -56,8 +56,8 @@ export class Orchestrator {
         const {jobs, hooks} = this.ctx;
         jobs.register<RunPayload>('run.start', (p) => this.start(p.runId), {maxAttempts: 2, onFailed: (p, e) => this.failRun(p.runId, e)});
         jobs.register<RunPayload>('run.advance', (p) => this.advance(p.runId), {maxAttempts: 5});
-        jobs.register<StepPayload>('step.execute', (p, j) => this.executeStep(p.runId, p.stepId, j.attempt), {maxAttempts: 2, onFailed: (p, e) => this.stepCrashed(p.runId, p.stepId, e)});
-        jobs.register<ApprovalPayload>('approval.resume', (p) => this.resume(p.approvalId), {maxAttempts: 2, onFailed: async (p, e) => {
+        jobs.register<StepPayload>('step.execute', (p, j) => this.executeStep(p.runId, p.stepId, j.attempt, j.signal), {maxAttempts: 2, onFailed: (p, e) => this.stepCrashed(p.runId, p.stepId, e)});
+        jobs.register<ApprovalPayload>('approval.resume', (p, j) => this.resume(p.approvalId, j.attempt, j.signal), {maxAttempts: 2, onFailed: async (p, e) => {
             const a = await getApproval(this.ctx.sql, p.approvalId);
             if (a?.runId && a.stepId) {
                 await this.stepCrashed(a.runId, a.stepId, e);
@@ -175,10 +175,19 @@ export class Orchestrator {
                     return;
                 }
                 if (plan.mode === 'plan') {
-                    await tx(this.ctx.sql, async (t) => {
+                    // Stopped while planning? Then nothing starts.
+                    const live = await tx(this.ctx.sql, async (t) => {
+                        const locked = await lockRun(t, runId);
+                        if (!locked || TERMINAL_RUN.includes(locked.status)) {
+                            return false;
+                        }
                         await insertSteps(t, runId, plan.steps);
                         await updateRun(t, runId, {kind: 'plan', goal: plan.goal, status: 'running'});
+                        return true;
                     });
+                    if (!live) {
+                        return;
+                    }
                     const card = await savePost(this.ctx, (await getUser(this.ctx.sql, captain.userId))!, channel, {
                         message: `Plan: ${plan.goal}`, rootId: run.rootPostId, type: 'plan',
                         props: {plan: {runId, status: 'running', goal: plan.goal, steps: plan.steps.map((s) => ({id: s.id, title: s.title, agentId: s.agentId, status: 'pending' as const, postId: null, dependsOn: s.dependsOn}))}},
@@ -205,6 +214,10 @@ export class Orchestrator {
         }
         // A single agent answers.
         await tx(this.ctx.sql, async (t) => {
+            const locked = await lockRun(t, runId);
+            if (!locked || TERMINAL_RUN.includes(locked.status)) {
+                return;
+            }
             await insertSteps(t, runId, [{id: 's1', agentId: captain.id, title: 'Reply', instructions: '', dependsOn: []}]);
             await updateRun(t, runId, {kind: 'single', status: 'running'});
             await this.ctx.jobs.enqueue(t, 'run.advance', {runId}, {dedupeKey: `advance:${runId}`});
@@ -292,7 +305,7 @@ export class Orchestrator {
         return {messages: [{role: 'system', content: stepSystem(agent, setting, tools, run.goal, step)}, user], text: `${step.title}\n${step.instructions}\n${trigger.message}`, hasImages: images.length > 0};
     }
 
-    async executeStep(runId: string, stepId: string, attempt = 1): Promise<void> {
+    async executeStep(runId: string, stepId: string, attempt = 1, jobSignal?: AbortSignal): Promise<void> {
         const run = await getRun(this.ctx.sql, runId);
         const step = await getStep(this.ctx.sql, runId, stepId);
         if (!run || !step || TERMINAL_RUN.includes(run.status) || step.status !== 'running') {
@@ -319,13 +332,20 @@ export class Orchestrator {
             return;
         }
         const tier = await chooseTier(this.ctx, run.workspaceId, sc.agent, first.text, run.kind === 'plan' ? 'step' : 'reply');
-        await this.drive(run, step, sc, {messages: first.messages, pending: [], fileIds: []}, {tier, needVision: first.hasImages});
+        await this.drive(run, step, sc, {messages: first.messages, pending: [], fileIds: []}, {tier, needVision: first.hasImages, jobSignal});
     }
 
     // Run (or continue) a step and record what happened.
-    private async drive(run: RunRow, step: StepRow, sc: {agent: AgentRow; agentUser: UserRow; requester: UserRow; setting: Setting}, state: StepState, opts: {tier: Tier; needVision: boolean; resume?: ApprovalRow}): Promise<void> {
+    private async drive(run: RunRow, step: StepRow, sc: {agent: AgentRow; agentUser: UserRow; requester: UserRow; setting: Setting}, state: StepState, opts: {tier: Tier; needVision: boolean; resume?: ApprovalRow; jobSignal?: AbortSignal}): Promise<void> {
         const ctrl = new AbortController();
-        const stop = this.watch(run.id, ctrl);
+        const stopWatch = this.watch(run.id, ctrl);
+        // This worker lost its job lease (another worker has the job now): stop quietly.
+        const onLost = () => ctrl.abort();
+        opts.jobSignal?.addEventListener('abort', onLost);
+        const stop = () => {
+            stopWatch();
+            opts.jobSignal?.removeEventListener('abort', onLost);
+        };
         const plan = run.kind === 'plan';
         let outcome: RunnerOutcome;
         try {
@@ -352,7 +372,7 @@ export class Orchestrator {
         }
         stop();
         if (outcome.kind === 'waiting') {
-            await updateStep(this.ctx.sql, run.id, step.id, {status: 'waiting_approval', transcript: outcome.state, addCost: outcome.costUsd, modelId: outcome.modelId});
+            await updateStep(this.ctx.sql, run.id, step.id, {status: 'waiting_approval', waitingApprovalId: outcome.approvalId, transcript: outcome.state, addCost: outcome.costUsd, modelId: outcome.modelId});
             await addRunCost(this.ctx.sql, run.id, outcome.costUsd);
             await this.ctx.jobs.enqueue(this.ctx.sql, 'run.advance', {runId: run.id}, {dedupeKey: `advance:${run.id}`});
             return;
@@ -362,7 +382,7 @@ export class Orchestrator {
 
     private async finishStep(run: RunRow, step: StepRow, r: {status: PlanStepStatus; output?: string; error?: string; postId?: string; costUsd?: number; modelId?: string | null}): Promise<void> {
         await updateStep(this.ctx.sql, run.id, step.id, {
-            status: r.status, output: r.output ?? null, error: r.error ?? null, postId: r.postId, finishedAt: now(), transcript: null,
+            status: r.status, output: r.output ?? null, error: r.error ?? null, postId: r.postId, finishedAt: now(), transcript: null, waitingApprovalId: null,
             addCost: r.costUsd ?? 0, modelId: r.modelId ?? undefined,
         });
         await addRunCost(this.ctx.sql, run.id, r.costUsd ?? 0);
@@ -379,7 +399,7 @@ export class Orchestrator {
 
     // ------------------------------------------------------------ approvals
 
-    async decide(db: Db, a: PostAction): Promise<void> {
+    async decide(_db: Db, a: PostAction): Promise<void> {
         const card = a.post.props.decision as DecisionCard | undefined;
         if (!card) {
             throw badRequest('This message has no decision.');
@@ -387,40 +407,49 @@ export class Orchestrator {
         if (a.action !== 'approve' && a.action !== 'reject') {
             throw badRequest('Choose approve or reject.');
         }
-        const approval = await getApproval(db, card.approvalId);
+        const approval = await getApproval(this.ctx.sql, card.approvalId);
         if (!approval) {
             throw notFound('Approval');
         }
         if (approval.requestedBy !== a.user.id) {
-            const role = await getMemberRole(db, approval.workspaceId, a.user.id);
+            const role = await getMemberRole(this.ctx.sql, approval.workspaceId, a.user.id);
             if (!role || !atLeast(role, 'admin')) {
                 throw forbidden('Only the person who asked, or a workspace admin, can decide this.');
             }
         }
-        const decided = await decideApproval(db, approval.id, a.action === 'approve' ? 'approved' : 'rejected', a.user.id);
-        if (!decided) {
-            throw conflict(approval.status === 'expired' ? 'This request expired.' : 'Someone already decided this.', 'already_decided');
-        }
-        const row = await mergePostProps(db, a.post.id, {decision: {...card, status: decided.status, decidedBy: a.user.id, decidedAt: decided.decidedAt}});
-        await postEdited(this.ctx, db, row);
+        // The decision, the card and the job that resumes the work commit together.
+        const {decided, row} = await tx(this.ctx.sql, async (t) => {
+            const d = await decideApproval(t, approval.id, a.action === 'approve' ? 'approved' : 'rejected', a.user.id);
+            if (!d) {
+                throw conflict(approval.status === 'expired' ? 'This request expired.' : 'Someone already decided this.', 'already_decided');
+            }
+            const r = await mergePostProps(t, a.post.id, {decision: {...card, status: d.status, decidedBy: a.user.id, decidedAt: d.decidedAt}});
+            if (approval.runId) {
+                await this.ctx.jobs.enqueue(t, 'approval.resume', {approvalId: approval.id}, {dedupeKey: `resume:${approval.id}`});
+            }
+            return {decided: d, row: r};
+        });
+        await postEdited(this.ctx, this.ctx.sql, row);
         audit(this.ctx.sql, {workspaceId: approval.workspaceId, userId: a.user.id, action: `approval_${decided.status}`, target: approval.id, meta: {tool: approval.tool}});
-        if (approval.runId) {
-            await this.ctx.jobs.enqueue(db, 'approval.resume', {approvalId: approval.id}, {dedupeKey: `resume:${approval.id}`});
-        }
     }
 
-    async resume(approvalId: string): Promise<void> {
+    async resume(approvalId: string, attempt = 1, jobSignal?: AbortSignal): Promise<void> {
         const approval = await getApproval(this.ctx.sql, approvalId);
         if (!approval?.runId || !approval.stepId || (approval.status !== 'approved' && approval.status !== 'rejected')) {
             return;
         }
         const run = await getRun(this.ctx.sql, approval.runId);
         const step = await getStep(this.ctx.sql, approval.runId, approval.stepId);
-        if (!run || !step || TERMINAL_RUN.includes(run.status) || step.status !== 'waiting_approval') {
-            return;
+        if (!run || !step || TERMINAL_RUN.includes(run.status) || step.waitingApprovalId !== approvalId) {
+            return; // stopped, or the step has moved on to another decision
         }
-        const claimed = await this.ctx.sql`update run_steps set status = 'running' where run_id = ${run.id} and id = ${step.id} and status = 'waiting_approval'`;
-        if (claimed.count !== 1) {
+        // Claim the step for exactly this approval. A retry after a crash finds it
+        // already running for the same approval and carries on.
+        const claimed = await this.ctx.sql`
+            update run_steps set status = 'running'
+            where run_id = ${run.id} and id = ${step.id} and status = 'waiting_approval' and waiting_approval_id = ${approvalId}`;
+        const recovering = claimed.count === 0 && attempt > 1 && step.status === 'running';
+        if (claimed.count !== 1 && !recovering) {
             return;
         }
         const live = await updateRun(this.ctx.sql, run.id, {status: 'running'});
@@ -434,7 +463,7 @@ export class Orchestrator {
         const lastUser = [...state.messages].reverse().find((m) => m.role === 'user');
         const text = typeof lastUser?.content === 'string' ? lastUser.content : '';
         const tier = await chooseTier(this.ctx, run.workspaceId, sc.agent, text, run.kind === 'plan' ? 'step' : 'reply');
-        await this.drive(run, step, sc, state, {tier, needVision: false, resume: approval});
+        await this.drive(run, step, sc, state, {tier, needVision: false, resume: approval, jobSignal});
     }
 
     // ------------------------------------------------------------ run.finish

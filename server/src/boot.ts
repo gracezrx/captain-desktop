@@ -52,7 +52,11 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
     // The hub needs the context for typing events; the context needs the hub.
     let ctxRef: Ctx | null = null;
     const hub = new Hub({
-        authenticate: async (token) => (await authenticate(sql, token))?.user.id ?? null,
+        authenticate: async (token) => {
+            const s = await authenticate(sql, token);
+            return s ? {userId: s.user.id, sessionId: s.sessionId} : null;
+        },
+        validSessions: async (ids) => new Set((await sql`select id from sessions where id = any(${ids}) and expires_at > ${Date.now()}`).map((r) => r.id as string)),
         onTyping: async (userId, channelId, rootId, connectionId) => {
             if (!ctxRef || !(await getChannelMember(sql, channelId, userId))) {
                 return;

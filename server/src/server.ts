@@ -48,7 +48,7 @@ export async function buildServer(api: Api): Promise<FastifyInstance> {
     const app = Fastify({
         loggerInstance: log,
         logController: new LogController({disableRequestLogging: !config.production}),
-        trustProxy: true,
+        trustProxy: typeof config.trustProxy === 'number' ? ((_addr: string, hop: number) => hop < (config.trustProxy as number)) : config.trustProxy,
         bodyLimit: 1024 * 1024,
         routerOptions: {maxParamLength: 300},
     });

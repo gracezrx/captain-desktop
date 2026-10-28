@@ -7,6 +7,7 @@ import nodemailer from 'nodemailer';
 
 import {storeFile} from '../../app/files.js';
 import {config} from '../../config.js';
+import {audit} from '../../store/audit.js';
 
 import {str, type Tool} from './types.js';
 
@@ -58,6 +59,20 @@ export const requestApproval: Tool = {
 
 let transport: nodemailer.Transporter | null = null;
 
+// The card shows exactly what gets sent: same fields, same limits.
+const TO_MAX = 500;
+const SUBJECT_MAX = 200;
+const BODY_MAX = 20_000;
+
+function recipients(raw: unknown): string[] {
+    return str(raw, TO_MAX).split(/[,;\s]+/).map((s) => s.trim()).filter((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s));
+}
+
+function fromAddress(): string {
+    const m = config.tools.mailFrom.match(/<([^>]+)>/);
+    return (m ? m[1] : config.tools.mailFrom).trim();
+}
+
 export const sendEmail: Tool = {
     name: 'send_email',
     description: 'Send an email. A person must approve it first; they see the recipients, subject and body.',
@@ -77,27 +92,35 @@ export const sendEmail: Tool = {
         title: `Send email: ${str(args.subject, 100)}`,
         reason: 'This email leaves the workspace.',
         fields: [
-            {label: 'To', value: str(args.to, 500)},
-            {label: 'Subject', value: str(args.subject, 200)},
-            {label: 'Message', value: str(args.body, 4000)},
+            {label: 'To', value: recipients(args.to).join(', ') || '(no valid address)'},
+            {label: 'Subject', value: str(args.subject, SUBJECT_MAX)},
+            {label: 'Message', value: str(args.body, BODY_MAX)},
         ],
     }),
     async run(tc, args) {
-        const to = str(args.to, 500).split(/[,;\s]+/).map((s) => s.trim()).filter((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s));
+        const to = recipients(args.to);
         if (!to.length || to.length > 20) {
             return {content: 'The email was not sent: the recipient list is empty, invalid or longer than 20 addresses.'};
         }
         if (!config.tools.smtpUrl) {
             return {content: 'Approved, but this server has no email account set up (SMTP_URL), so nothing was sent. Tell the person to copy the draft and send it themselves.'};
         }
+        // A daily cap per workspace, so an open sign-up can't turn the server into a spam relay.
+        const [{n}] = await tc.ctx.sql`
+            select coalesce(sum((meta->>'recipients')::int), 0)::int as n from audit_log
+            where workspace_id = ${tc.channel.workspaceId} and action = 'email_sent' and created_at > ${Date.now() - 86_400_000}`;
+        if (Number(n) + to.length > config.tools.emailDailyLimit) {
+            return {content: `The email was not sent: this workspace has reached its limit of ${config.tools.emailDailyLimit} email recipients a day.`};
+        }
         transport ??= nodemailer.createTransport(config.tools.smtpUrl);
         const info = await transport.sendMail({
-            from: config.tools.mailFrom || undefined,
+            from: {name: `${tc.requester.displayName} via Captain`, address: fromAddress()},
             replyTo: tc.requester.email ?? undefined,
             to,
-            subject: str(args.subject, 200),
-            text: str(args.body, 50_000),
+            subject: str(args.subject, SUBJECT_MAX),
+            text: str(args.body, BODY_MAX),
         });
-        return {content: `Email sent to ${to.join(', ')} (message id ${info.messageId}).`};
+        audit(tc.ctx.sql, {workspaceId: tc.channel.workspaceId, userId: tc.requester.id, action: 'email_sent', target: tc.run.id, meta: {recipients: to.length, messageId: info.messageId}});
+        return {content: `Email sent to ${to.join(', ')}.`};
     },
 };

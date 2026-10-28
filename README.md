@@ -90,7 +90,7 @@ Create an account in the browser. With no model key set, agents answer in **demo
 cd server && npm test     # needs a captain_test database
 ```
 
-The 37 tests cover:
+The 47 tests cover:
 
 - accounts, invites and roles
 - private channels and DMs
@@ -101,6 +101,7 @@ The 37 tests cover:
 - streaming and tool calls
 - vision routing, budgets
 - the job queue's retries and recovery
+- security: what agents may quote where, links that need approval, blocked private addresses, approvals that run once, revoked invites and sessions, forged client addresses
 
 ## Background
 

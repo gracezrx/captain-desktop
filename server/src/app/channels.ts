@@ -55,12 +55,13 @@ export async function create(ctx: Ctx, user: UserRow, workspaceId: string, input
     for (let i = 2; await getChannelByName(ctx.sql, workspaceId, name); i++) {
         name = `${slugify(data.displayName)}-${i}`;
     }
-    const memberIds = [...new Set([user.id, ...(data.memberIds ?? [])])];
+    const memberIds: string[] = [];
     const channel = await tx(ctx.sql, async (t) => {
         const c = await createChannel(t, {workspaceId, type: data.type, name, displayName: data.displayName, purpose: data.purpose, createdBy: user.id});
-        for (const id of memberIds) {
+        for (const id of new Set([user.id, ...(data.memberIds ?? [])])) {
             if (id === user.id || (await getMemberRole(t, workspaceId, id))) {
                 await addChannelMember(t, c.id, id, id === user.id ? 'admin' : 'member');
+                memberIds.push(id);
             }
         }
         return c;
