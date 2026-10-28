@@ -1,0 +1,46 @@
+{
+  "$comment": "Model catalog for the router. Mirrors Captain's router table (ids, tiers, priorities, prices per 1M tokens, provider routes). A model is usable when at least one of its routes' providers has an API key set. Routes are tried in order; models in a tier are tried by priority (higher first). Edit freely: add a model, change priorities, or pin agents to models.",
+  "providers": {
+    "openrouter": {"label": "OpenRouter", "baseUrl": "https://openrouter.ai/api/v1", "apiKeyEnv": "OPENROUTER_API_KEY", "headers": {"HTTP-Referer": "https://captainspace.ai", "X-Title": "Captain"}},
+    "openai": {"label": "OpenAI", "baseUrl": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY"},
+    "anthropic": {"label": "Anthropic", "baseUrl": "https://api.anthropic.com/v1", "apiKeyEnv": "ANTHROPIC_API_KEY"},
+    "google": {"label": "Google", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKeyEnv": "GOOGLE_API_KEY"},
+    "deepseek": {"label": "DeepSeek", "baseUrl": "https://api.deepseek.com", "apiKeyEnv": "DEEPSEEK_API_KEY"},
+    "dashscope_intl": {"label": "Alibaba DashScope", "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "apiKeyEnv": "DASHSCOPE_API_KEY"},
+    "siliconflow": {"label": "SiliconFlow", "baseUrl": "https://api.siliconflow.com/v1", "apiKeyEnv": "SILICONFLOW_API_KEY"},
+    "moonshot": {"label": "Moonshot", "baseUrl": "https://api.moonshot.ai/v1", "apiKeyEnv": "MOONSHOT_API_KEY"},
+    "gateway": {"label": "Custom OpenAI-compatible gateway", "baseUrlEnv": "LLM_GATEWAY_URL", "apiKeyEnv": "LLM_GATEWAY_KEY"}
+  },
+  "models": [
+    {"id": "deepseek-flash", "label": "DeepSeek V4.1 Flash", "vendor": "DeepSeek", "tier": "easy", "priority": 100, "vision": false, "tools": true, "priceInPerM": 0.3, "priceOutPerM": 1.2,
+     "routes": [["deepseek", "deepseek-flash"], ["siliconflow", "deepseek-ai/DeepSeek-V4.1-Flash"], ["openrouter", "deepseek/deepseek-v4.1-flash"], ["gateway", "deepseek-flash"]]},
+    {"id": "minimax-m3.1-flash", "label": "MiniMax M3.1 Flash", "vendor": "MiniMax", "tier": "easy", "priority": 95, "vision": false, "tools": true, "priceInPerM": 0.15, "priceOutPerM": 0.6,
+     "routes": [["siliconflow", "MiniMaxAI/MiniMax-M3.1-Flash"], ["openrouter", "minimax/minimax-m3.1-flash"], ["gateway", "minimax-m3.1-flash"]]},
+    {"id": "claude-haiku-5-5", "label": "Claude Haiku 5.5", "vendor": "Anthropic", "tier": "easy", "priority": 90, "vision": true, "tools": true, "priceInPerM": 0.1, "priceOutPerM": 0.5,
+     "routes": [["anthropic", "claude-haiku-5-5"], ["openrouter", "anthropic/claude-haiku-5-5"], ["gateway", "claude-haiku-5-5"]]},
+    {"id": "glm-5.3-flash", "label": "GLM 5.3 Flash", "vendor": "Zhipu", "tier": "easy", "priority": 85, "vision": false, "tools": true, "priceInPerM": 0.15, "priceOutPerM": 0.5,
+     "routes": [["siliconflow", "zai-org/GLM-5.3-Flash"], ["openrouter", "z-ai/glm-5.3-flash"], ["gateway", "glm-5.3-flash"]]},
+    {"id": "gpt-6-luna", "label": "GPT-6 Luna", "vendor": "OpenAI", "tier": "easy", "priority": 80, "vision": true, "tools": true, "priceInPerM": 0.1, "priceOutPerM": 0.5,
+     "routes": [["openai", "gpt-6-luna"], ["openrouter", "openai/gpt-6-luna"], ["gateway", "gpt-6-luna"]]},
+    {"id": "qwen-flash", "label": "Qwen 3.7 Flash", "vendor": "Alibaba", "tier": "easy", "priority": 70, "vision": false, "tools": true, "priceInPerM": 0.1, "priceOutPerM": 0.4,
+     "routes": [["dashscope_intl", "qwen3.7-flash"], ["openrouter", "qwen/qwen3.7-flash"], ["gateway", "qwen-flash"]]},
+
+    {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol", "vendor": "OpenAI", "tier": "balanced", "priority": 100, "vision": true, "tools": true, "priceInPerM": 2, "priceOutPerM": 10,
+     "routes": [["openai", "gpt-6.1-sol"], ["openrouter", "openai/gpt-6.1-sol"], ["gateway", "gpt-6.1-sol"]]},
+    {"id": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5", "vendor": "Anthropic", "tier": "balanced", "priority": 95, "vision": true, "tools": true, "priceInPerM": 2, "priceOutPerM": 10,
+     "routes": [["anthropic", "claude-sonnet-5-5"], ["openrouter", "anthropic/claude-sonnet-5-5"], ["gateway", "claude-sonnet-5-5"]]},
+    {"id": "mimo-v2.6-pro", "label": "MiMo V2.6 Pro", "vendor": "Xiaomi", "tier": "balanced", "priority": 90, "vision": false, "tools": true, "priceInPerM": 0.435, "priceOutPerM": 0.87,
+     "routes": [["openrouter", "xiaomi/mimo-v2.6-pro"], ["gateway", "mimo-v2.6-pro"]]},
+    {"id": "glm-5.3", "label": "GLM 5.3", "vendor": "Zhipu", "tier": "balanced", "priority": 85, "vision": false, "tools": true, "priceInPerM": 1.4, "priceOutPerM": 4.4,
+     "routes": [["siliconflow", "zai-org/GLM-5.3"], ["openrouter", "z-ai/glm-5.3"], ["gateway", "glm-5.3"]]},
+    {"id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash", "vendor": "Google", "tier": "balanced", "priority": 80, "vision": true, "tools": true, "priceInPerM": 0.75, "priceOutPerM": 3.75,
+     "routes": [["google", "gemini-3.8-flash"], ["openrouter", "google/gemini-3.8-flash"], ["gateway", "gemini-3.8-flash"]]},
+
+    {"id": "claude-opus-5-5", "label": "Claude Opus 5.5", "vendor": "Anthropic", "tier": "hard", "priority": 100, "vision": true, "tools": true, "priceInPerM": 4, "priceOutPerM": 20,
+     "routes": [["anthropic", "claude-opus-5-5"], ["openrouter", "anthropic/claude-opus-5-5"], ["gateway", "claude-opus-5-5"]]},
+    {"id": "kimi-k3.1-pro", "label": "Kimi K3.1 Pro", "vendor": "Moonshot", "tier": "hard", "priority": 90, "vision": false, "tools": true, "priceInPerM": 2, "priceOutPerM": 10,
+     "routes": [["moonshot", "kimi-k3.1-pro"], ["openrouter", "moonshotai/kimi-k3.1-pro"], ["gateway", "kimi-k3.1-pro"]]},
+    {"id": "gemini-4-argon", "label": "Gemini 4 Argon", "vendor": "Google", "tier": "hard", "priority": 85, "vision": true, "tools": true, "priceInPerM": 2, "priceOutPerM": 10,
+     "routes": [["google", "gemini-4-argon"], ["openrouter", "google/gemini-4-argon"], ["gateway", "gemini-4-argon"]]}
+  ]
+}

@@ -1,0 +1,227 @@
+// The real-time hub, modeled on Mattermost's web hub:
+// - one WebSocket per window; the first message authenticates it
+// - every event has a sequence number per connection; the last 256 sent are
+//   kept, so a client that reconnects within two minutes gets a lossless replay
+// - "droppable" events (typing, streaming text) are skipped for a client whose
+//   send buffer is backed up; everything else is always delivered
+// - with several server instances, events travel between them over Postgres
+//   LISTEN/NOTIFY (see cluster.ts)
+
+import type {WebSocket} from 'ws';
+
+import type {ClientMessage, EventEnvelope, ServerEvent} from '../shared/types.js';
+import {newId} from '../util/ids.js';
+import {log} from '../util/log.js';
+
+const BUFFER = 256;
+const REPLAY_WINDOW_MS = 120_000;
+const AUTH_TIMEOUT_MS = 10_000;
+const SLOW_CLIENT_BYTES = 1_000_000;
+
+type Conn = {
+    id: string;
+    userId: string;
+    ws: WebSocket | null;
+    seq: number;
+    buffer: EventEnvelope[];
+    alive: boolean;
+    disconnectedAt: number | null;
+};
+
+export type PublishOptions = {droppable?: boolean; exceptConnectionId?: string};
+
+export type HubDeps = {
+    authenticate: (token: string) => Promise<string | null>; // token -> user id
+    onTyping: (userId: string, channelId: string, rootId: string | null, connectionId: string) => Promise<void>;
+    forward?: (userIds: string[], event: ServerEvent, opts: PublishOptions) => void; // to other nodes
+};
+
+export class Hub {
+    private conns = new Map<string, Conn>();
+    private byUser = new Map<string, Set<string>>();
+    private pinger: NodeJS.Timeout | null = null;
+    private readonly deps: HubDeps;
+
+    constructor(deps: HubDeps) {
+        this.deps = deps;
+    }
+
+    start(): void {
+        this.pinger = setInterval(() => this.sweep(), 30_000);
+    }
+
+    stop(): void {
+        if (this.pinger) {
+            clearInterval(this.pinger);
+        }
+        for (const c of this.conns.values()) {
+            c.ws?.close(1001, 'server shutting down');
+        }
+    }
+
+    get connectionCount(): number {
+        let n = 0;
+        for (const c of this.conns.values()) {
+            n += c.ws ? 1 : 0;
+        }
+        return n;
+    }
+
+    isOnline(userId: string): boolean {
+        return [...(this.byUser.get(userId) ?? [])].some((id) => this.conns.get(id)?.ws);
+    }
+
+    // A new socket: wait for {action: "auth"} before sending anything.
+    accept(ws: WebSocket): void {
+        let authed = false;
+        const timer = setTimeout(() => !authed && ws.close(4001, 'authentication timeout'), AUTH_TIMEOUT_MS);
+        ws.on('message', async (raw) => {
+            let msg: ClientMessage;
+            try {
+                msg = JSON.parse(raw.toString());
+            } catch {
+                return;
+            }
+            if (!authed) {
+                if (msg.action !== 'auth') {
+                    ws.close(4001, 'authenticate first');
+                    return;
+                }
+                const userId = await this.deps.authenticate(msg.token).catch(() => null);
+                if (!userId) {
+                    ws.send(JSON.stringify({status: 'FAIL', seqReply: msg.seq, error: 'invalid session'}));
+                    ws.close(4001, 'invalid session');
+                    return;
+                }
+                authed = true;
+                clearTimeout(timer);
+                this.bind(ws, userId, msg.connectionId, msg.lastSeq);
+                return;
+            }
+            const conn = this.connFor(ws);
+            if (!conn) {
+                return;
+            }
+            if (msg.action === 'ping') {
+                ws.send(JSON.stringify({status: 'OK', seqReply: msg.seq, data: {text: 'pong', serverTime: Date.now()}}));
+            } else if (msg.action === 'typing' && typeof msg.channelId === 'string') {
+                void this.deps.onTyping(conn.userId, msg.channelId, msg.rootId ?? null, conn.id).catch(() => undefined);
+            }
+        });
+        ws.on('pong', () => {
+            const c = this.connFor(ws);
+            if (c) {
+                c.alive = true;
+            }
+        });
+        ws.on('close', () => {
+            clearTimeout(timer);
+            const c = this.connFor(ws);
+            if (c) {
+                c.ws = null;
+                c.disconnectedAt = Date.now();
+            }
+        });
+        ws.on('error', () => undefined);
+    }
+
+    private connFor(ws: WebSocket): Conn | undefined {
+        return (ws as unknown as {__conn?: Conn}).__conn;
+    }
+
+    private bind(ws: WebSocket, userId: string, connectionId?: string, lastSeq?: number): void {
+        const previous = connectionId ? this.conns.get(connectionId) : undefined;
+        let conn: Conn;
+        let replayed = false;
+        if (previous && previous.userId === userId && !previous.ws && typeof lastSeq === 'number' && this.canReplay(previous, lastSeq)) {
+            conn = previous;
+            conn.ws = ws;
+            conn.disconnectedAt = null;
+            replayed = true;
+        } else {
+            conn = {id: newId(), userId, ws, seq: 0, buffer: [], alive: true, disconnectedAt: null};
+            this.conns.set(conn.id, conn);
+            const set = this.byUser.get(userId) ?? new Set();
+            set.add(conn.id);
+            this.byUser.set(userId, set);
+        }
+        (ws as unknown as {__conn?: Conn}).__conn = conn;
+        conn.alive = true;
+        if (replayed) {
+            // Hello first (not sequenced), then everything they missed.
+            ws.send(JSON.stringify({event: 'hello', data: {connectionId: conn.id, serverTime: Date.now(), replayed: true}, seq: -1}));
+            for (const e of conn.buffer.filter((x) => x.seq > (lastSeq as number))) {
+                ws.send(JSON.stringify(e));
+            }
+        } else {
+            this.send(conn, {event: 'hello', data: {connectionId: conn.id, serverTime: Date.now(), replayed: false}}, false);
+        }
+    }
+
+    private canReplay(c: Conn, lastSeq: number): boolean {
+        if (!c.disconnectedAt || Date.now() - c.disconnectedAt > REPLAY_WINDOW_MS) {
+            return false;
+        }
+        if (lastSeq >= c.seq - 1) {
+            return true; // nothing missed
+        }
+        return c.buffer.length > 0 && c.buffer[0].seq <= lastSeq + 1;
+    }
+
+    private send(c: Conn, event: ServerEvent, droppable: boolean): void {
+        if (droppable && (!c.ws || c.ws.bufferedAmount > SLOW_CLIENT_BYTES)) {
+            return; // never buffered either: replaying stale typing or partial text is pointless
+        }
+        const env = {...event, seq: c.seq++} as EventEnvelope;
+        if (!droppable) {
+            c.buffer.push(env);
+            if (c.buffer.length > BUFFER) {
+                c.buffer.shift();
+            }
+        }
+        if (c.ws && c.ws.readyState === 1) {
+            c.ws.send(JSON.stringify(env));
+        }
+    }
+
+    // Deliver to every connection of these users, on this node and others.
+    publish(userIds: string[], event: ServerEvent, opts: PublishOptions = {}): void {
+        this.deliver(userIds, event, opts);
+        this.deps.forward?.(userIds, event, opts);
+    }
+
+    // Delivery from another node (no forwarding back).
+    deliver(userIds: string[], event: ServerEvent, opts: PublishOptions = {}): void {
+        for (const userId of new Set(userIds)) {
+            for (const id of this.byUser.get(userId) ?? []) {
+                const c = this.conns.get(id);
+                if (c && id !== opts.exceptConnectionId) {
+                    this.send(c, event, Boolean(opts.droppable));
+                }
+            }
+        }
+    }
+
+    // Ping live sockets; forget connections gone longer than the replay window.
+    private sweep(): void {
+        const t = Date.now();
+        for (const c of this.conns.values()) {
+            if (c.ws) {
+                if (!c.alive) {
+                    c.ws.terminate();
+                    continue;
+                }
+                c.alive = false;
+                c.ws.ping();
+            } else if (c.disconnectedAt && t - c.disconnectedAt > REPLAY_WINDOW_MS) {
+                this.conns.delete(c.id);
+                const set = this.byUser.get(c.userId);
+                set?.delete(c.id);
+                if (set && !set.size) {
+                    this.byUser.delete(c.userId);
+                }
+            }
+        }
+        log.debug({connections: this.connectionCount}, 'hub sweep');
+    }
+}

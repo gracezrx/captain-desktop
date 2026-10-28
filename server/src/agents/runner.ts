@@ -1,0 +1,281 @@
+// One agent doing one piece of work: call a model through the router, use
+// tools, stream its reply into a message, and stop for approval before any
+// action with outside effects. Its transcript is returned on a pause so the
+// work resumes exactly where it stopped once a person decides.
+
+import type {Ctx} from '../app/context.js';
+import {postEdited} from '../app/events.js';
+import {savePost} from '../app/posts.js';
+import {config} from '../config.js';
+import type {Purpose} from '../llm/router.js';
+import {type ChatMessage, LlmError, type ToolCall} from '../llm/types.js';
+import type {DecisionCard, ModelAttribution, PostProps, PostType, Tier} from '../shared/types.js';
+import type {AgentRow} from '../store/agents.js';
+import {type ChannelRow, listChannelMemberIds} from '../store/channels.js';
+import {attachFiles} from '../store/files.js';
+import {getPost, updatePost} from '../store/posts.js';
+import {type ApprovalRow, createApproval, type RunRow, setApprovalPost} from '../store/runs.js';
+import type {UserRow} from '../store/users.js';
+import {AppError} from '../util/errors.js';
+import {log} from '../util/log.js';
+
+import {withoutImageData} from './history.js';
+import {getTool, toolDefs, toolsFor} from './tools/index.js';
+import type {Tool, ToolContext} from './tools/types.js';
+
+export type StepState = {messages: ChatMessage[]; pending: ToolCall[]; fileIds: string[]};
+
+export type RunnerInput = {
+    ctx: Ctx;
+    run: RunRow;
+    stepId: string;
+    agent: AgentRow;
+    agentUser: UserRow;
+    requester: UserRow;
+    channel: ChannelRow;
+    threadRoot: string | null;
+    purpose: Purpose;
+    tier: Tier;
+    needVision: boolean;
+    postType: PostType;
+    postProps: PostProps;
+    state: StepState;
+    useTools: boolean;
+    signal: AbortSignal;
+    resume?: ApprovalRow; // continue after this approval was decided
+    onPost?: (postId: string) => Promise<void>;
+};
+
+export type RunnerOutcome =
+    | {kind: 'done'; text: string; postId: string; fileIds: string[]; costUsd: number; modelId: string | null}
+    | {kind: 'waiting'; approvalId: string; state: StepState; costUsd: number; modelId: string | null};
+
+export class CancelledError extends Error {
+    constructor() {
+        super('cancelled');
+    }
+}
+
+const ACTIVITY: Record<string, (args: Record<string, unknown>) => string> = {
+    web_search: (a) => `Searching the web for "${String(a.query ?? '').slice(0, 60)}"`,
+    read_url: (a) => `Reading ${String(a.url ?? 'a page').slice(0, 80)}`,
+    search_workspace: (a) => `Searching messages for "${String(a.query ?? '').slice(0, 60)}"`,
+    read_channel: (a) => `Reading #${String(a.channel ?? '').replace(/^#/, '')}`,
+    create_document: (a) => `Writing "${String(a.title ?? 'a document').slice(0, 60)}"`,
+    ask_agent: (a) => `Asking @${String(a.agent ?? 'a teammate').replace(/^@/, '')}`,
+};
+
+export function friendlyError(e: unknown): string {
+    if (e instanceof AppError) {
+        return e.message;
+    }
+    if (e instanceof LlmError) {
+        return e.status === 0 && /set up/.test(e.message) ? e.message : 'The AI models didn\'t respond properly. Try again in a minute.';
+    }
+    return 'Something went wrong on our side. Try again.';
+}
+
+export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
+    const {ctx, run, agent, agentUser, channel, requester} = input;
+    const state: StepState = {messages: [...input.state.messages], pending: [...input.state.pending], fileIds: [...input.state.fileIds]};
+    const tools = input.useTools ? toolsFor(agent) : [];
+    const allowed = new Set(tools.map((t) => t.name));
+    let costUsd = 0;
+    let model: ModelAttribution | null = null;
+
+    // The reply message, created up front so people see the agent working.
+    let postId: string | null = null;
+    let shown = '';
+    let lastSent = 0;
+    let timer: NodeJS.Timeout | null = null;
+
+    const ensurePost = async (): Promise<string> => {
+        if (!postId) {
+            const post = await savePost(ctx, agentUser, channel, {message: '', rootId: input.threadRoot, type: input.postType, props: {...input.postProps, streaming: true}});
+            postId = post.id;
+            await input.onPost?.(post.id);
+        }
+        return postId;
+    };
+    // Partial text goes to the channel's members as droppable events, at most every 120 ms.
+    let audience: string[] | null = null;
+    const stream = (text: string) => {
+        shown = text;
+        if (!postId || !audience) {
+            return;
+        }
+        const send = () => {
+            timer = null;
+            lastSent = Date.now();
+            ctx.hub.publish(audience!, {event: 'post_stream', data: {postId: postId!, channelId: channel.id, text: shown}}, {droppable: true});
+        };
+        const wait = 120 - (Date.now() - lastSent);
+        if (wait <= 0) {
+            send();
+        } else if (!timer) {
+            timer = setTimeout(send, wait);
+        }
+    };
+
+    const finalize = async (text: string, extra: PostProps = {}): Promise<string> => {
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+        const id = await ensurePost();
+        const current = await getPost(ctx.sql, id);
+        const props: PostProps = {...(current?.props ?? {}), ...input.postProps, ...extra, streaming: false};
+        if (model) {
+            props.model = model;
+        }
+        const fileIds = [...new Set([...(current?.fileIds ?? []), ...state.fileIds])];
+        const row = await updatePost(ctx.sql, id, {message: text, props, fileIds});
+        await attachFiles(ctx.sql, state.fileIds, id);
+        await postEdited(ctx, ctx.sql, row);
+        return id;
+    };
+
+    const toolContext = (): ToolContext => ({ctx, agent, agentUser, requester, channel, run, stepId: input.stepId, threadRoot: input.threadRoot, signal: input.signal});
+
+    // Ask a person before an action with outside effects. Returns the approval.
+    const askApproval = async (tool: Tool, call: ToolCall, args: Record<string, unknown>): Promise<ApprovalRow> => {
+        const d = tool.describe?.(args) ?? {title: `Run ${tool.name}`, reason: '', fields: []};
+        const approval = await createApproval(ctx.sql, {
+            workspaceId: channel.workspaceId, channelId: channel.id, runId: run.id, stepId: input.stepId, agentId: agent.id,
+            tool: tool.name, args, toolCallId: call.id, title: d.title, reason: d.reason, fields: d.fields, requestedBy: requester.id,
+        });
+        const card: DecisionCard = {approvalId: approval.id, runId: run.id, title: d.title, reason: d.reason, fields: d.fields, tool: tool.name, status: 'pending', decidedBy: null, decidedAt: null};
+        const post = await savePost(ctx, agentUser, channel, {
+            message: `@${requester.username} needs to approve: ${d.title}`,
+            rootId: input.threadRoot,
+            type: 'decision',
+            props: {decision: card},
+        });
+        await setApprovalPost(ctx.sql, approval.id, post.id);
+        return approval;
+    };
+
+    const runTool = async (tool: Tool, args: Record<string, unknown>): Promise<string> => {
+        try {
+            const res = await tool.run(toolContext(), args);
+            state.fileIds.push(...(res.fileIds ?? []));
+            return res.content.slice(0, 20_000);
+        } catch (e) {
+            if (input.signal.aborted) {
+                throw new CancelledError();
+            }
+            log.info({tool: tool.name, err: (e as Error).message}, 'tool failed');
+            return `The ${tool.name} tool failed: ${(e as Error).message.slice(0, 500)}`;
+        }
+    };
+
+    // Work through the tool calls of the last model turn. Stops at the first
+    // one that needs a person, leaving the rest for after the decision.
+    const processPending = async (): Promise<ApprovalRow | null> => {
+        while (state.pending.length) {
+            const call = state.pending.shift()!;
+            const tool = getTool(call.function.name);
+            let args: Record<string, unknown> = {};
+            try {
+                args = JSON.parse(call.function.arguments || '{}');
+            } catch {
+                state.messages.push({role: 'tool', tool_call_id: call.id, content: 'The arguments were not valid JSON. Try again.'});
+                continue;
+            }
+            if (!tool || !allowed.has(tool.name)) {
+                state.messages.push({role: 'tool', tool_call_id: call.id, content: `There is no tool called ${call.function.name} available to you.`});
+                continue;
+            }
+            if (tool.external) {
+                return askApproval(tool, call, args);
+            }
+            stream(`_${(ACTIVITY[tool.name] ?? (() => `Using ${tool.name}`))(args)}…_`);
+            state.messages.push({role: 'tool', tool_call_id: call.id, content: await runTool(tool, args)});
+        }
+        return null;
+    };
+
+    const pause = async (approval: ApprovalRow): Promise<RunnerOutcome> => {
+        if (postId) {
+            await finalize(shown && !shown.startsWith('_') ? shown : 'I need a sign-off before I continue.');
+        }
+        return {kind: 'waiting', approvalId: approval.id, state: {...state, messages: withoutImageData(state.messages)}, costUsd, modelId: model?.id ?? null};
+    };
+
+    try {
+        audience = await listChannelMemberIds(ctx.sql, channel.id);
+        await ensurePost();
+
+        if (input.resume) {
+            const a = input.resume;
+            const tool = getTool(a.tool);
+            const call: ToolCall = {id: a.toolCallId ?? `call_${a.id}`, type: 'function', function: {name: a.tool, arguments: JSON.stringify(a.args)}};
+            let content: string;
+            if (a.status === 'approved' && tool) {
+                stream(`_${a.title}…_`);
+                content = await runTool(tool, a.args);
+            } else {
+                content = 'The person rejected this action, so it was not done. Don\'t try it again; say what you would do instead or ask what they want changed.';
+            }
+            state.messages.push({role: 'tool', tool_call_id: call.id, content});
+            const next = await processPending();
+            if (next) {
+                return pause(next);
+            }
+        } else if (state.pending.length) {
+            const next = await processPending();
+            if (next) {
+                return pause(next);
+            }
+        }
+
+        const rounds = Math.max(1, config.agents.maxToolRounds);
+        for (let round = 0; ; round++) {
+            if (input.signal.aborted) {
+                throw new CancelledError();
+            }
+            const lastRound = round >= rounds;
+            const res = await ctx.router.complete({
+                workspaceId: channel.workspaceId,
+                purpose: input.purpose,
+                tier: input.tier,
+                pinnedModel: agent.model,
+                needVision: input.needVision,
+                messages: state.messages,
+                tools: tools.length && !lastRound ? toolDefs(tools) : undefined,
+                signal: input.signal,
+                onText: (t) => stream(t),
+                attribution: {userId: requester.id, agentId: agent.id, runId: run.id, stepId: input.stepId},
+            });
+            costUsd += res.costUsd;
+            model = {id: res.modelId, provider: res.provider, tier: res.tier, costUsd};
+
+            if (res.toolCalls.length && !lastRound) {
+                state.messages.push({role: 'assistant', content: res.text || null, tool_calls: res.toolCalls});
+                state.pending = [...res.toolCalls];
+                const next = await processPending();
+                if (next) {
+                    return pause(next);
+                }
+                continue;
+            }
+            const text = res.text.trim() || (state.fileIds.length ? 'Here it is.' : '(No answer.)');
+            state.messages.push({role: 'assistant', content: text});
+            const id = await finalize(text);
+            return {kind: 'done', text, postId: id, fileIds: state.fileIds, costUsd, modelId: model.id};
+        }
+    } catch (e) {
+        if (timer) {
+            clearTimeout(timer);
+        }
+        const cancelled = e instanceof CancelledError || input.signal.aborted;
+        const message = cancelled ? `${shown && !shown.startsWith('_') ? `${shown}\n\n` : ''}_Stopped._` : `I couldn't finish this: ${friendlyError(e)}`;
+        if (postId) {
+            await finalize(message, cancelled ? {} : {error: friendlyError(e)}).catch(() => undefined);
+        }
+        if (cancelled) {
+            throw new CancelledError();
+        }
+        throw e;
+    }
+}
