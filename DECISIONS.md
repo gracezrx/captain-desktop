@@ -24,7 +24,8 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | B4 | Sessions last **30 days** and extend while in use. Passwords use scrypt; tokens are stored only as hashes. Changing your password signs out your other devices. | `SESSION_DAYS` |
 | B5 | Rate limits are 600 requests a minute per person and 20 sign-in attempts a minute per IP, kept in memory on each instance. Client IPs are taken from `X-Forwarded-For` only as far as the number of proxies you declare, so the header can't be forged to get around the limit. | `RATE_LIMIT_PER_MINUTE`, `AUTH_RATE_LIMIT_PER_MINUTE`, `TRUST_PROXY` (set `1` behind one load balancer) |
 | B5b | Signing out or changing your password closes that session's open connections right away on the same server, and within 30 seconds on other servers. | `realtime/hub.ts` |
-| B6 | **Not built yet:** <ul><li>password reset by email</li><li>email verification</li><li>SSO</li><li>account deletion</li></ul> | First to add before a wide launch. |
+| B6 | **Password reset**, two ways: "Forgot password?" emails a link that works for an hour (when `SMTP_URL` is set), or an admin makes a one-time link in Settings → People that works for 24 hours. Only owners can reset admins' and owners' passwords. Using a link signs the person out everywhere else. | `app/passwords.ts` |
+| B7 | **Not built yet:** <ul><li>email verification</li><li>SSO</li><li>account deletion</li></ul> | Add email verification before a wide open launch. |
 
 ## Chat
 

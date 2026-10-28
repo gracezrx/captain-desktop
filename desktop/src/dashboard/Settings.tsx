@@ -54,6 +54,7 @@ function People({admin}: {admin: boolean}) {
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [name, setName] = useState(ws.name);
+    const [resetFor, setResetFor] = useState<{userId: string; url: string} | null>(null);
 
     const load = () => api.members(ws.id).then((r) => {
         setMembers(r.members);
@@ -136,6 +137,14 @@ function People({admin}: {admin: boolean}) {
                                 ) : (
                                     <span className='text-[12px] font-semibold text-muted capitalize'>{m.role}</span>
                                 )}
+                                {admin && m.userId !== me.id && (ws.role === 'owner' || (m.role !== 'owner' && m.role !== 'admin')) && (
+                                    <button
+                                        type='button'
+                                        title='Make a one-time link to set a new password'
+                                        className='text-[12px] font-semibold text-muted hover:text-ink'
+                                        onClick={() => api.resetLink(ws.id, m.userId).then((r) => setResetFor({userId: m.userId, url: r.url})).catch((err) => setError(errorMessage(err)))}
+                                    >Reset password</button>
+                                )}
                                 {admin && m.userId !== me.id && (
                                     <button
                                         type='button'
@@ -148,6 +157,15 @@ function People({admin}: {admin: boolean}) {
                     })}
                 </div>
             </section>
+            {resetFor && (
+                <div className='rounded-2xl bg-tint px-3 py-2.5'>
+                    <p className='text-[12.5px] text-ink'>Send this to {displayName(users[resetFor.userId])} privately. It works once, for 24 hours, and signs them out of other devices.</p>
+                    <div className='mt-1.5 flex items-center gap-2'>
+                        <code className='min-w-0 flex-1 truncate text-[12px] text-ink'>{resetFor.url}</code>
+                        <button type='button' className='inline-flex items-center gap-1 text-[12px] font-bold text-accent-text' onClick={() => void navigator.clipboard.writeText(resetFor.url)}><Copy size={13}/> Copy</button>
+                    </div>
+                </div>
+            )}
             {error && <p className='text-[12.5px] text-alert'>{error}</p>}
         </div>
     );

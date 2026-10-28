@@ -4,7 +4,9 @@ import type {FastifyInstance} from 'fastify';
 import {z} from 'zod';
 
 import {changePassword, issueSession, login, logout, me, nameSchema, signupUser} from '../app/auth.js';
+import {requestByEmail, useResetLink} from '../app/passwords.js';
 import {acceptInvite, createWorkspaceFor, previewInvite} from '../app/workspaces.js';
+import {mailEnabled} from '../util/mail.js';
 import {config} from '../config.js';
 import {tx} from '../db/index.js';
 import {getInviteByHash, inviteUsable} from '../store/workspaces.js';
@@ -28,6 +30,7 @@ export function authRoutes(app: FastifyInstance, api: Api): void {
 
     app.get('/config', {config: {public: true}}, async () => ({
         openSignup: config.openSignup,
+        emailEnabled: mailEnabled(),
         demoMode: ctx.router.demoMode,
         version: api.version,
     }));
@@ -53,6 +56,14 @@ export function authRoutes(app: FastifyInstance, api: Api): void {
         const body = z.object({login: z.string(), password: z.string()}).parse(req.body);
         return login(ctx.sql, body, meta(req));
     });
+
+    // Forgot password: always the same answer, whether or not the address has an account.
+    app.post('/auth/password-reset', {config: {public: true, auth: true}}, async (req) => {
+        await requestByEmail(ctx, (req.body as {email?: unknown})?.email, {ip: req.ip});
+        return {ok: true};
+    });
+
+    app.post('/auth/password-reset/confirm', {config: {public: true, auth: true}}, async (req) => useResetLink(ctx, req.body, meta(req)));
 
     app.post('/auth/logout', async (req) => {
         await logout(ctx.sql, req.token, req.sessionId);

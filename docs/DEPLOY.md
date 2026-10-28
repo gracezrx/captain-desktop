@@ -118,4 +118,4 @@ For a universal build that runs on Intel and Apple Silicon: `npm run tauri build
 - [ ] `APP_SECRET` is set and the site is on HTTPS.
 - [ ] `TRUST_PROXY` matches your setup (`1` behind one load balancer), so sign-in limits apply per real client.
 - [ ] Decide on `OPEN_SIGNUP`, and set a monthly budget per workspace (Settings → Models & spend).
-- [ ] Password reset by email doesn't exist yet. Until it does, an admin resets accounts directly in the database.
+- [ ] Set `SMTP_URL` so "Forgot password?" can email links; without it, admins make reset links in Settings → People.

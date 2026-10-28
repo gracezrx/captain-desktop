@@ -107,4 +107,35 @@ describe('accounts and workspaces', () => {
         const {demoMode} = await member.api.get(`/workspaces/${ws.id}/models`);
         assert.equal(demoMode, true);
     });
+
+    it('an admin\'s reset link sets a new password once and signs the person out everywhere', async () => {
+        const owner = await signup(s.base, {workspaceName: 'Resets'});
+        const [ws] = await owner.api.get('/workspaces');
+        const invite = await owner.api.post(`/workspaces/${ws.id}/invites`, {});
+        const member = await signup(s.base, {invite: invite.token});
+
+        await expectStatus(member.api.post(`/workspaces/${ws.id}/members/${owner.session.user.id}/reset-link`), 403);
+        const {url} = await owner.api.post(`/workspaces/${ws.id}/members/${member.session.user.id}/reset-link`);
+        const token = new URL(url).searchParams.get('reset')!;
+
+        await expectStatus(client(s.base).post('/auth/password-reset/confirm', {token, password: 'short'}), 400);
+        const fresh = await client(s.base).post('/auth/password-reset/confirm', {token, password: 'a brand new password'});
+        assert.equal(fresh.user.id, member.session.user.id);
+        await expectStatus(member.api.get('/users/me'), 401);
+        await expectStatus(client(s.base).post('/auth/password-reset/confirm', {token, password: 'another new password'}), 400);
+        const again = await client(s.base).post('/auth/login', {login: member.session.user.email, password: 'a brand new password'});
+        assert.ok(again.token);
+
+        // Admins can't reset owners; only an owner can reset an admin.
+        await owner.api.patch(`/workspaces/${ws.id}/members/${member.session.user.id}`, {role: 'admin'});
+        const admin = client(s.base, again.token);
+        await expectStatus(admin.post(`/workspaces/${ws.id}/members/${owner.session.user.id}/reset-link`), 403);
+    });
+
+    it('asking for a reset by email needs email set up on the server', async () => {
+        const e = await expectStatus(client(s.base).post('/auth/password-reset', {email: 'someone@example.com'}), 400);
+        assert.equal(e.body.error, 'email_disabled');
+        assert.equal((await client(s.base).get('/config')).emailEnabled, false);
+    });
 });
+

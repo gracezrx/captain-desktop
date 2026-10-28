@@ -2,6 +2,7 @@ import type {FastifyInstance} from 'fastify';
 import {z} from 'zod';
 
 import * as agentsApp from '../app/agents.js';
+import {adminResetLink} from '../app/passwords.js';
 import * as ws from '../app/workspaces.js';
 import {listPendingApprovals} from '../store/runs.js';
 import {requireWorkspaceRole} from '../app/permissions.js';
@@ -40,6 +41,11 @@ export function workspaceRoutes(app: FastifyInstance, api: Api): void {
         const p = req.params as P;
         await ws.removeMember(ctx, req.user, p.id, p.userId);
         return {ok: true};
+    });
+
+    app.post('/workspaces/:id/members/:userId/reset-link', async (req) => {
+        const p = req.params as P;
+        return adminResetLink(ctx, req.user, p.id, p.userId);
     });
 
     app.post('/workspaces/:id/invites', async (req) => {

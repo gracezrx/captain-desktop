@@ -83,6 +83,11 @@ export async function authenticate(db: Db, token: string): Promise<{user: UserRo
     return {user, sessionId: session.id};
 }
 
+// After a password change or reset: no cached session survives.
+export function clearSessionCache(): void {
+    cache.clear();
+}
+
 export async function logout(db: Db, token: string, sessionId: string): Promise<void> {
     cache.delete(sha256(token));
     await deleteSession(db, sessionId);

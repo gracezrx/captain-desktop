@@ -3,11 +3,10 @@
 // - request_approval: ask a person to sign off before the agent goes on
 // - send_email: real email over SMTP, always after a person approves
 
-import nodemailer from 'nodemailer';
-
 import {storeFile} from '../../app/files.js';
 import {config} from '../../config.js';
 import {audit} from '../../store/audit.js';
+import {sendMail} from '../../util/mail.js';
 
 import {str, type Tool} from './types.js';
 
@@ -57,7 +56,6 @@ export const requestApproval: Tool = {
     },
 };
 
-let transport: nodemailer.Transporter | null = null;
 
 // The card shows exactly what gets sent: same fields, same limits.
 const TO_MAX = 500;
@@ -68,10 +66,6 @@ function recipients(raw: unknown): string[] {
     return str(raw, TO_MAX).split(/[,;\s]+/).map((s) => s.trim()).filter((s) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s));
 }
 
-function fromAddress(): string {
-    const m = config.tools.mailFrom.match(/<([^>]+)>/);
-    return (m ? m[1] : config.tools.mailFrom).trim();
-}
 
 export const sendEmail: Tool = {
     name: 'send_email',
@@ -112,15 +106,14 @@ export const sendEmail: Tool = {
         if (Number(n) + to.length > config.tools.emailDailyLimit) {
             return {content: `The email was not sent: this workspace has reached its limit of ${config.tools.emailDailyLimit} email recipients a day.`};
         }
-        transport ??= nodemailer.createTransport(config.tools.smtpUrl);
-        const info = await transport.sendMail({
-            from: {name: `${tc.requester.displayName} via Captain`, address: fromAddress()},
+        const messageId = await sendMail({
+            fromName: `${tc.requester.displayName} via Captain`,
             replyTo: tc.requester.email ?? undefined,
             to,
             subject: str(args.subject, SUBJECT_MAX),
             text: str(args.body, BODY_MAX),
         });
-        audit(tc.ctx.sql, {workspaceId: tc.channel.workspaceId, userId: tc.requester.id, action: 'email_sent', target: tc.run.id, meta: {recipients: to.length, messageId: info.messageId}});
+        audit(tc.ctx.sql, {workspaceId: tc.channel.workspaceId, userId: tc.requester.id, action: 'email_sent', target: tc.run.id, meta: {recipients: to.length, messageId}});
         return {content: `Email sent to ${to.join(', ')}.`};
     },
 };

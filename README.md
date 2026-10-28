@@ -28,7 +28,7 @@ It comes in three parts:
 ## What it does
 
 - **Workspaces and people**
-  - Sign up, sign in, and invite people with links.
+  - Sign up, sign in, invite people with links, and reset a forgotten password.
   - Roles: owner, admin, member, guest.
   - One account can belong to several workspaces.
 - **Chat**
@@ -90,9 +90,9 @@ Create an account in the browser. With no model key set, agents answer in **demo
 cd server && npm test     # needs a captain_test database
 ```
 
-The 47 tests cover:
+The 49 tests cover:
 
-- accounts, invites and roles
+- accounts, invites, roles and password resets
 - private channels and DMs
 - threads, unread counts and file links
 - WebSocket replay after a reconnect

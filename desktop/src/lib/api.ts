@@ -134,13 +134,28 @@ export async function signUp(server: string, input: {name: string; email: string
     return keep(serverUrl, await post<Session>('/auth/signup', input));
 }
 
+async function publicPost<T>(server: string, path: string, body: unknown): Promise<T> {
+    serverUrl = normalizeServer(server);
+    token = '';
+    return post<T>(path, body);
+}
+
+export async function requestPasswordReset(server: string, email: string): Promise<void> {
+    await publicPost(server, '/auth/password-reset', {email});
+}
+
+export async function confirmPasswordReset(server: string, resetToken: string, password: string): Promise<StoredSession> {
+    const s = await publicPost<Session>(server, '/auth/password-reset/confirm', {token: resetToken, password});
+    return keep(serverUrl, s);
+}
+
 export async function signOut(): Promise<void> {
     await post('/auth/logout').catch(() => undefined);
     token = '';
     await secretDelete('session');
 }
 
-export async function serverConfig(server = serverUrl): Promise<{openSignup: boolean; demoMode: boolean; version: string}> {
+export async function serverConfig(server = serverUrl): Promise<{openSignup: boolean; emailEnabled: boolean; demoMode: boolean; version: string}> {
     const res = await fetch(`${normalizeServer(server)}/api/v1/config`).catch(() => null);
     if (!res?.ok) {
         throw new ApiError(0, 'network', 'Can\'t reach that server.');
@@ -170,6 +185,7 @@ export const api = {
     members: (id: string) => get<{members: WorkspaceMember[]; users: User[]}>(`/workspaces/${id}/members`),
     setRole: (id: string, userId: string, role: WorkspaceRole) => patch(`/workspaces/${id}/members/${userId}`, {role}),
     removeMember: (id: string, userId: string) => del(`/workspaces/${id}/members/${userId}`),
+    resetLink: (id: string, userId: string) => post<{url: string; expiresAt: number}>(`/workspaces/${id}/members/${userId}/reset-link`),
     createInvite: (id: string, p: {role?: WorkspaceRole; maxUses?: number | null; expiresInDays?: number | null}) => post<{url: string; token: string; id: string}>(`/workspaces/${id}/invites`, p),
     acceptInvite: (inviteToken: string) => post<Workspace>(`/invites/${encodeURIComponent(inviteToken)}/accept`),
 
