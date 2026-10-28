@@ -1,54 +1,45 @@
-// Real-time events. The dashboard window owns the one WebSocket to
-// Mattermost, applies each event to its store, sends notifications, sets the
-// menu bar badge, and relays the event to the panel window. In a plain
-// browser each page opens its own socket.
+// Real-time events. The dashboard window owns the one WebSocket, applies each
+// event to its store, sends notifications, sets the menu bar badge, and
+// relays events to the panel window. In a plain browser each page opens its
+// own socket.
 
-import {WebSocketClient} from '@mattermost/client';
-import type {Post} from '@mattermost/types/posts';
-
-import {type Session, websocketUrl} from './mm';
+import {plain} from '../components/Markup';
 import {isTauri, notify, onRelayedEvent, relayToPanel, setBadge, windowLabel} from './native';
-import {channelTitle, decisionOf, displayName, needsYou, useStore} from './store';
+import {Socket} from './socket';
+import {agentForUser, canDecide, channelTitle, decisionOf, displayName, needsYou, useStore} from './store';
+import type {Post, ServerEvent} from './types';
 
-type MmEvent = {
-    event: string;
-    data: Record<string, unknown>;
-    broadcast: {channel_id?: string; user_id?: string};
-};
+let socket: Socket | null = null;
 
-let socket: WebSocketClient | null = null;
-let stopRelay: (() => void) | null = null;
-
-export function startRealtime(session: Session): () => void {
+export function startRealtime(): () => void {
     const owner = !isTauri || windowLabel() === 'main';
     const sendsNotifications = windowLabel() === 'main';
 
     if (!owner) {
         useStore.getState().setConnection('online');
-        stopRelay = onRelayedEvent((e) => handleEvent(e as MmEvent, false));
-        return () => stopRelay?.();
+        const stop = onRelayedEvent((e) => {
+            const msg = e as ServerEvent | {event: 'resync'};
+            if (msg.event === 'resync') {
+                void resync();
+            } else {
+                handleEvent(msg, false);
+            }
+        });
+        return stop;
     }
 
-    socket = new WebSocketClient();
-    socket.addMessageListener((msg) => {
-        handleEvent(msg as unknown as MmEvent, sendsNotifications);
-        void relayToPanel(msg);
+    socket = new Socket({
+        onEvent: (e) => {
+            handleEvent(e, sendsNotifications);
+            void relayToPanel(e);
+        },
+        onState: (state) => useStore.getState().setConnection(state),
+        onResync: () => {
+            void resync();
+            void relayToPanel({event: 'resync'});
+        },
     });
-    socket.addFirstConnectListener(() => useStore.getState().setConnection('online'));
-    socket.addReconnectListener(() => {
-        useStore.getState().setConnection('online');
-        // Catch up on anything missed while disconnected.
-        const s = useStore.getState();
-        if (s.session) {
-            void s.bootstrap(s.session).then(() => {
-                if (s.activeChannelId) {
-                    void useStore.getState().loadPosts(s.activeChannelId);
-                }
-            });
-        }
-    });
-    socket.addCloseListener(() => useStore.getState().setConnection('offline'));
-    socket.initialize(websocketUrl(session.serverUrl), session.token);
+    socket.open();
 
     let lastBadge = -1;
     const unsubscribe = useStore.subscribe((s) => {
@@ -66,73 +57,153 @@ export function startRealtime(session: Session): () => void {
     };
 }
 
-export function sendTyping(channelId: string, rootId = ''): void {
-    socket?.userTyping(channelId, rootId);
+// Missed too much while offline: reload channels and the open chat.
+async function resync(): Promise<void> {
+    const s = useStore.getState();
+    if (!s.workspace) {
+        return;
+    }
+    const active = s.activeChannelId;
+    const thread = s.threadRootId;
+    await s.switchWorkspace(s.workspace.id);
+    if (active) {
+        useStore.setState({activeChannelId: active});
+        await useStore.getState().loadPosts(active).catch(() => undefined);
+    }
+    if (thread) {
+        useStore.getState().openThread(thread);
+    }
 }
 
-function handleEvent(msg: MmEvent, sendsNotifications: boolean): void {
+export function sendTyping(channelId: string, rootId: string | null): void {
+    socket?.typing(channelId, rootId);
+}
+
+const streamed = new Set<string>(); // agent replies we saw being written, to announce when done
+
+function handleEvent(msg: ServerEvent, sendsNotifications: boolean): void {
     const store = useStore.getState();
     const me = store.me;
     switch (msg.event) {
     case 'posted': {
-        const post = JSON.parse(msg.data.post as string) as Post;
-        const mentions = msg.data.mentions ? (JSON.parse(msg.data.mentions as string) as string[]) : [];
-        const channelType = msg.data.channel_type as string;
-        const fromOthers = post.user_id !== me?.id;
-        const mentionsMe = fromOthers && (mentions.includes(me?.id ?? '') || channelType === 'D' || channelType === 'G' || Boolean(decisionOf(post)));
+        const {post, mentions, channelType} = msg.data;
+        const fromOthers = post.userId !== me?.id;
+        const d = decisionOf(post);
+        const mentionsMe = fromOthers && (mentions.includes(me?.id ?? '') || channelType === 'D' || channelType === 'G' || Boolean(d && canDecide(d, me, store.workspace)));
         const wasKnown = Boolean(store.posts[post.id]);
-        store.receivePost(post, {fromOthers, mentionsMe});
-        // A message from someone ends their "is typing".
-        if (store.typing[post.channel_id]?.userId === post.user_id) {
-            useStore.setState((s) => {
-                const typing = {...s.typing};
-                delete typing[post.channel_id];
-                return {typing};
-            });
-        }
-        if (sendsNotifications && mentionsMe && !wasKnown) {
+        store.receivePost(post, {mentionsMe});
+        store.clearTyping(post.channelId, post.userId);
+        if (post.props.streaming) {
+            streamed.add(post.id);
+        } else if (sendsNotifications && mentionsMe && !wasKnown) {
             void notifyAbout(post);
         }
         break;
     }
     case 'post_edited': {
-        store.updatePost(JSON.parse(msg.data.post as string) as Post);
-        break;
-    }
-    case 'typing': {
-        const channelId = msg.broadcast.channel_id;
-        if (channelId && msg.data.user_id !== me?.id) {
-            store.setTyping(channelId, msg.data.user_id as string);
+        const {post} = msg.data;
+        const before = store.posts[post.id];
+        store.updatePost(post);
+        // An agent finished a reply: tell the person who asked.
+        if (streamed.has(post.id) && !post.props.streaming) {
+            streamed.delete(post.id);
+            if (sendsNotifications && before && repliesToMe(post)) {
+                void notifyAbout(post);
+            }
         }
         break;
     }
+    case 'post_deleted':
+        store.removePost(msg.data.postId);
+        break;
+    case 'post_stream':
+        store.setStream(msg.data.postId, msg.data.text);
+        break;
+    case 'typing':
+        if (msg.data.userId !== me?.id) {
+            store.setTyping(msg.data.channelId, msg.data.userId);
+        }
+        break;
+    case 'reaction_changed': {
+        const p = store.posts[msg.data.postId];
+        if (p) {
+            store.updatePost({...p, reactions: msg.data.reactions});
+        }
+        break;
+    }
+    case 'channel_created':
+    case 'channel_updated':
+        if (msg.data.channel.workspaceId === store.workspace?.id) {
+            store.addChannel(msg.data.channel);
+            void store.ensureUsers(msg.data.channel.memberIds ?? []);
+        }
+        break;
+    case 'channel_member_added':
+        if (msg.data.userId === me?.id) {
+            void store.ensureChannel(msg.data.channelId);
+        }
+        break;
+    case 'channel_member_removed':
+        if (msg.data.userId === me?.id) {
+            store.dropChannel(msg.data.channelId);
+        }
+        break;
     case 'channel_viewed': {
-        const channelId = msg.data.channel_id as string;
-        const c = store.channels[channelId];
-        const m = store.members[channelId];
+        const c = store.channels[msg.data.channelId];
+        const m = store.members[msg.data.channelId];
         if (c && m) {
-            useStore.setState((s) => ({members: {...s.members, [channelId]: {...m, msg_count: c.total_msg_count, mention_count: 0}}}));
+            useStore.setState((s) => ({members: {...s.members, [c.id]: {...m, msgCount: c.totalMsgCount, mentionCount: 0}}}));
         }
         break;
     }
+    case 'run_updated':
+        useStore.setState((s) => ({runs: {...s.runs, [msg.data.runId]: msg.data.status}}));
+        break;
+    case 'user_updated':
+        useStore.setState((s) => ({users: {...s.users, [msg.data.user.id]: {...s.users[msg.data.user.id], ...msg.data.user}}, me: s.me?.id === msg.data.user.id ? {...s.me, ...msg.data.user} : s.me}));
+        break;
+    case 'workspace_member_added':
+        if (msg.data.workspaceId === store.workspace?.id) {
+            useStore.setState((s) => ({users: {...s.users, [msg.data.user.id]: msg.data.user}}));
+            if (msg.data.user.isBot) {
+                void store.refreshAgents();
+            }
+        }
+        break;
     default:
         break;
     }
 }
 
+// An agent's reply in your DM with it, or in a thread you started.
+function repliesToMe(post: Post): boolean {
+    const s = useStore.getState();
+    const author = s.users[post.userId];
+    if (!author?.isBot || !s.me) {
+        return false;
+    }
+    const channel = s.channels[post.channelId];
+    if (channel?.type === 'D') {
+        return true;
+    }
+    const root = post.rootId ? s.posts[post.rootId] : undefined;
+    return root?.userId === s.me.id;
+}
+
 async function notifyAbout(post: Post): Promise<void> {
     const s = useStore.getState();
     // Don't interrupt when the dashboard is in front showing that chat.
-    if (document.hasFocus() && s.activeChannelId === post.channel_id) {
+    if (document.hasFocus() && s.activeChannelId === post.channelId) {
         return;
     }
-    await s.ensureUsers([post.user_id]);
+    await s.ensureUsers([post.userId]);
     const st = useStore.getState();
-    const sender = displayName(st.users[post.user_id]);
-    const channel = st.channels[post.channel_id];
+    const sender = displayName(st.users[post.userId]);
+    const channel = st.channels[post.channelId];
     const where = channel && channel.type !== 'D' ? ` in ${channelTitle(channel, st.me?.id, st.users)}` : '';
-    const decision = decisionOf(post);
-    const title = decision ? `${sender} needs a decision${where}` : `${sender}${where}`;
-    const body = decision ? decision.title : post.message.slice(0, 180) || 'Sent an attachment';
-    await notify(title, body, {mode: 'thread', channelId: post.channel_id, postId: post.id});
+    const d = decisionOf(post);
+    const agent = agentForUser(st.agents, post.userId);
+    const title = d ? `${sender} needs your decision${where}` : `${sender}${where}`;
+    const body = d ? d.title : (plain(post.message).slice(0, 180) || (agent ? 'Replied' : 'Sent an attachment'));
+    await notify(title, body, {mode: 'thread', channelId: post.channelId, postId: post.id});
 }

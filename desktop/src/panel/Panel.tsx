@@ -1,18 +1,18 @@
-import type {Post} from '@mattermost/types/posts';
 import {AppWindow, ArrowLeft, Check, ChevronRight, Inbox, PenLine} from 'lucide-react';
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import {ChatIcon} from '../components/ChatIcon';
 import {ChatPicker} from '../components/ChatPicker';
 import {Composer} from '../components/Composer';
+import {plain} from '../components/Markup';
 import {MessageRow} from '../components/MessageRow';
 import {Typing} from '../components/Typing';
 import {preloadRecent, resume} from '../lib/boot';
 import {useChats} from '../lib/chats';
 import {shortWhen} from '../lib/format';
-import {client} from '../lib/mm';
 import {hidePanel, onPanelTarget, openDashboard, type PanelTarget, setPanelHeight} from '../lib/native';
 import {channelTitle, decisionOf, displayName, needsYou, type NeedsYouItem, useStore} from '../lib/store';
+import type {Post} from '../lib/types';
 
 export function Panel() {
     const [phase, setPhase] = useState<'loading' | 'signed-out' | 'ready'>('loading');
@@ -81,8 +81,8 @@ function Ready({target, setTarget}: {target: PanelTarget; setTarget: (t: PanelTa
     const posts = useStore((s) => s.posts);
     const postsByChannel = useStore((s) => s.postsByChannel);
     const me = useStore((s) => s.me);
-    const users = useStore((s) => s.users);
-    const waiting = useMemo(() => needsYou({channels, members, posts, postsByChannel, me, users}), [channels, members, posts, postsByChannel, me, users]);
+    const workspace = useStore((s) => s.workspace);
+    const waiting = useMemo(() => needsYou({channels, members, posts, postsByChannel, me, workspace}), [channels, members, posts, postsByChannel, me, workspace]);
 
     const tab = target.mode === 'thread' ? 'inbox' : target.mode;
     const tabBtn = (active: boolean) => `inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-bold transition-colors ${active ? 'bg-surface text-ink shadow-sm ring-1 ring-line' : 'text-muted hover:text-ink'}`;
@@ -180,7 +180,7 @@ function InboxView({items, onOpen}: {items: NeedsYouItem[]; onOpen: (i: NeedsYou
                 const channel = channels[item.channelId];
                 const post: Post | undefined = item.postId ? posts[item.postId] : undefined;
                 const d = decisionOf(post);
-                const who = post ? displayName(users[post.user_id]) : '';
+                const who = post ? displayName(users[post.userId]) : '';
                 return (
                     <button
                         key={`${item.channelId}:${item.postId}`}
@@ -202,7 +202,7 @@ function InboxView({items, onOpen}: {items: NeedsYouItem[]; onOpen: (i: NeedsYou
                             ) : (
                                 <span className='mt-0.5 line-clamp-2 text-[12.5px] text-text'>
                                     {who && channel?.type !== 'D' && <span className='font-semibold'>{who}: </span>}
-                                    {post?.message || 'New message'}
+                                    {plain(post?.message ?? '') || 'New message'}
                                 </span>
                             )}
                         </span>
@@ -214,10 +214,10 @@ function InboxView({items, onOpen}: {items: NeedsYouItem[]; onOpen: (i: NeedsYou
                 <>
                     <div className='px-2 pt-2 pb-1 text-[11px] font-bold text-muted'>Recent</div>
                     {recent.map((c) => (
-                        <button key={c.channel.id} type='button' onClick={() => onOpen({channelId: c.channel.id, kind: 'mention', at: c.channel.last_post_at})} className='flex h-9 w-full items-center gap-2.5 rounded-xl px-2 text-left hover:bg-surface/70'>
+                        <button key={c.channel.id} type='button' onClick={() => onOpen({channelId: c.channel.id, kind: 'mention', at: c.channel.lastPostAt})} className='flex h-9 w-full items-center gap-2.5 rounded-xl px-2 text-left hover:bg-surface/70'>
                             <ChatIcon channel={c.channel} size={22}/>
                             <span className='min-w-0 flex-1 truncate text-[13px] font-semibold text-ink'>{c.title}</span>
-                            <span className='text-[11px] text-muted'>{shortWhen(c.channel.last_post_at)}</span>
+                            <span className='text-[11px] text-muted'>{shortWhen(c.channel.lastPostAt || c.channel.createdAt)}</span>
                         </button>
                     ))}
                 </>
@@ -238,30 +238,30 @@ function ThreadView({channelId, postId, onBack}: {channelId: string; postId?: st
     const markViewed = useStore((s) => s.markViewed);
     const scroller = useRef<HTMLDivElement>(null);
     const focus = postId ? posts[postId] : undefined;
-    const rootId = focus ? focus.root_id || focus.id : '';
+    const rootId = focus ? focus.rootId || focus.id : '';
+    const loadThread = useStore((s) => s.loadThread);
 
     useEffect(() => {
         if (!loaded) {
-            void loadPosts(channelId);
+            void loadPosts(channelId).catch(() => undefined);
         }
         if (rootId) {
-            void client.getPostThread(rootId).then((list) => {
-                useStore.getState().mergePosts(list.order.map((id) => list.posts[id]).filter(Boolean));
-            }).catch(() => undefined);
+            void loadThread(rootId).catch(() => undefined);
         }
         void markViewed(channelId);
-    }, [channelId, rootId, loaded, loadPosts, markViewed]);
+    }, [channelId, rootId, loaded, loadPosts, loadThread, markViewed]);
 
     const context = useMemo(() => {
         const all = (ids ?? []).map((id) => posts[id]).filter(Boolean);
-        const inThread = rootId ? all.filter((p) => p.id === rootId || p.root_id === rootId) : [];
+        const inThread = rootId ? all.filter((p) => p.id === rootId || p.rootId === rootId) : [];
         // A thread with replies reads best on its own.
         if (inThread.length > 1) {
             return inThread.slice(-6);
         }
         // Otherwise end on the message that needs you, with a little lead-up.
-        const at = postId ? all.findIndex((p) => p.id === postId) : -1;
-        return at >= 0 ? all.slice(Math.max(0, at - 3), at + 1) : all.slice(-6);
+        const top = all.filter((p) => !p.rootId);
+        const at = postId ? top.findIndex((p) => p.id === postId) : -1;
+        return at >= 0 ? top.slice(Math.max(0, at - 3), at + 1) : top.slice(-6);
     }, [ids, posts, rootId, postId]);
 
     useEffect(() => {
@@ -269,7 +269,7 @@ function ThreadView({channelId, postId, onBack}: {channelId: string; postId?: st
         if (el) {
             el.scrollTop = el.scrollHeight;
         }
-    }, [context.length]);
+    }, [context.length, context.at(-1)?.message.length]);
 
     if (!channel) {
         return null;
@@ -292,7 +292,7 @@ function ThreadView({channelId, postId, onBack}: {channelId: string; postId?: st
             <Typing channelId={channelId}/>
             <Composer
                 channelId={channelId}
-                rootId={isChannel ? rootId : ''}
+                rootId={isChannel && rootId ? rootId : null}
                 variant='panel'
                 draftKey={`reply.${channelId}.${rootId}`}
                 autoFocus

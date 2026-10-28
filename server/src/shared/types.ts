@@ -85,6 +85,7 @@ export type DecisionCard = {
     reason: string;
     fields: {label: string; value: string}[];
     tool: string;
+    requestedBy: ID; // the person who asked; they or an admin decide
     status: 'pending' | 'approved' | 'rejected' | 'expired';
     decidedBy: ID | null;
     decidedAt: Ms | null;

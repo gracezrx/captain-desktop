@@ -1,24 +1,49 @@
-import {ArrowUp, Camera, Mic, Paperclip, X} from 'lucide-react';
-import {type ReactNode, useCallback, useEffect, useRef, useState} from 'react';
+import {ArrowUp, Camera, FileText, Mic, Paperclip, X} from 'lucide-react';
+import {type ReactNode, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
+import {errorMessage} from '../lib/api';
 import {getVoiceLang, setVoiceLang, useDictation, type VoiceLang} from '../lib/dictation';
-import {errorMessage} from '../lib/mm';
 import {captureScreen} from '../lib/native';
 import {sendTyping} from '../lib/realtime';
 import {type Attachment, makeAttachment, sendMessage} from '../lib/send';
+import {useStore} from '../lib/store';
+import type {Post} from '../lib/types';
+
+import {Avatar} from './Avatar';
 
 type Props = {
     channelId: string | null;
-    rootId?: string;
+    rootId?: string | null;
     variant: 'dashboard' | 'panel';
     placeholder?: string;
     autoFocus?: boolean;
     leading?: ReactNode;
     draftKey?: string;
-    onSent?: () => void;
+    onSent?: (post: Post) => void;
 };
 
-export function Composer({channelId, rootId = '', variant, placeholder, autoFocus, leading, draftKey, onSent}: Props) {
+type Suggestion = {id: string; insert: string; label: string; hint: string; userId: string};
+
+// "@" suggestions: agents first, then people in the workspace.
+function useSuggestions(query: string | null): Suggestion[] {
+    const agents = useStore((s) => s.agents);
+    const users = useStore((s) => s.users);
+    const meId = useStore((s) => s.me?.id);
+    return useMemo(() => {
+        if (query === null) {
+            return [];
+        }
+        const q = query.toLowerCase();
+        const fromAgents = Object.values(agents).filter((a) => a.enabled && (a.handle.toLowerCase().startsWith(q) || a.name.toLowerCase().startsWith(q))).
+            sort((a, b) => Number(b.isCoordinator) - Number(a.isCoordinator)).
+            map((a) => ({id: a.id, insert: a.handle, label: a.name, hint: a.isCoordinator ? 'plans with the team' : a.description, userId: a.userId}));
+        const people = Object.values(users).filter((u) => !u.isBot && u.id !== meId && (u.username.toLowerCase().startsWith(q) || u.displayName.toLowerCase().startsWith(q))).
+            map((u) => ({id: u.id, insert: u.username, label: u.displayName, hint: `@${u.username}`, userId: u.id}));
+        return [...fromAgents, ...people].slice(0, 7);
+    }, [agents, users, meId, query]);
+}
+
+export function Composer({channelId, rootId = null, variant, placeholder, autoFocus, leading, draftKey, onSent}: Props) {
     const storageKey = draftKey ? `captain.draft.${draftKey}` : null;
     const [text, setText] = useState(() => (storageKey ? localStorage.getItem(storageKey) ?? '' : ''));
     const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -31,6 +56,10 @@ export function Composer({channelId, rootId = '', variant, placeholder, autoFocu
     textRef.current = text;
     const lastTyping = useRef(0);
     const panel = variant === 'panel';
+    const [mention, setMention] = useState<{query: string; start: number} | null>(null);
+    const [pick, setPick] = useState(0);
+    const suggestions = useSuggestions(mention?.query ?? null);
+    const users = useStore((s) => s.users);
 
     const dictation = useDictation(useCallback(() => textRef.current, []), useCallback((t: string) => setText(t), []));
 
@@ -85,10 +114,11 @@ export function Composer({channelId, rootId = '', variant, placeholder, autoFocu
         const toSend = attachments;
         setText('');
         setAttachments([]);
+        setMention(null);
         try {
-            await sendMessage({channelId, text: message, attachments: toSend, rootId});
-            toSend.forEach((a) => URL.revokeObjectURL(a.previewUrl));
-            onSent?.();
+            const created = await sendMessage({channelId, text: message, attachments: toSend, rootId});
+            toSend.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
+            onSent?.(created);
         } catch (e) {
             setText(message);
             setAttachments(toSend);
@@ -102,7 +132,39 @@ export function Composer({channelId, rootId = '', variant, placeholder, autoFocu
     // Hold Option (alone) to talk; release to stop.
     const optionTimer = useRef<number | null>(null);
     const optionTalking = useRef(false);
+    const complete = (sug: Suggestion) => {
+        if (!mention) {
+            return;
+        }
+        const caret = area.current?.selectionStart ?? text.length;
+        const next = `${text.slice(0, mention.start)}@${sug.insert} ${text.slice(caret)}`;
+        setText(next);
+        setMention(null);
+        requestAnimationFrame(() => {
+            const pos = mention.start + sug.insert.length + 2;
+            area.current?.setSelectionRange(pos, pos);
+            area.current?.focus();
+        });
+    };
+
     const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (mention && suggestions.length) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                setPick((i) => (i + (e.key === 'ArrowDown' ? 1 : suggestions.length - 1)) % suggestions.length);
+                return;
+            }
+            if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) {
+                e.preventDefault();
+                complete(suggestions[Math.min(pick, suggestions.length - 1)]);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                setMention(null);
+                return;
+            }
+        }
         if (e.key === 'Alt' && !e.repeat && dictation.supported) {
             optionTimer.current = window.setTimeout(() => {
                 optionTalking.current = true;
@@ -132,8 +194,11 @@ export function Composer({channelId, rootId = '', variant, placeholder, autoFocu
         }
     };
 
-    const onChange = (v: string) => {
+    const onChange = (v: string, caret: number) => {
         setText(v);
+        const m = v.slice(0, caret).match(/(^|[\s(])@([\w.-]{0,30})$/);
+        setMention(m ? {query: m[2], start: caret - m[2].length - 1} : null);
+        setPick(0);
         if (channelId && Date.now() - lastTyping.current > 3000) {
             lastTyping.current = Date.now();
             sendTyping(channelId, rootId);
@@ -154,11 +219,40 @@ export function Composer({channelId, rootId = '', variant, placeholder, autoFocu
             }}
         >
             {leading}
+            {mention && suggestions.length > 0 && (
+                <div className='relative'>
+                    <ul role='listbox' className={`absolute right-0 left-0 z-30 overflow-hidden rounded-2xl bg-glass-strong p-1 ring-1 ring-line ${panel ? 'top-1' : 'bottom-1'}`} style={{boxShadow: 'var(--shadow-overlay)', backdropFilter: 'blur(24px)'}}>
+                        {suggestions.map((sug, i) => (
+                            <li key={sug.id} role='option' aria-selected={i === pick}>
+                                <button
+                                    type='button'
+                                    onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        complete(sug);
+                                    }}
+                                    onMouseEnter={() => setPick(i)}
+                                    className={`flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-left ${i === pick ? 'bg-tint' : ''}`}
+                                >
+                                    <Avatar user={users[sug.userId]} size={22}/>
+                                    <span className='text-[13px] font-bold text-ink'>{sug.label}</span>
+                                    <span className='min-w-0 flex-1 truncate text-[12px] text-muted'>{sug.hint}</span>
+                                </button>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
             {attachments.length > 0 && (
                 <div className='mb-2 flex flex-wrap gap-2 px-1'>
                     {attachments.map((a) => (
                         <div key={a.clientId} className='relative'>
-                            <img src={a.previewUrl} alt={a.name} className={`${panel ? 'h-20' : 'h-24'} rounded-xl object-cover ring-1 ring-line`}/>
+                            {a.previewUrl ? (
+                                <img src={a.previewUrl} alt={a.name} className={`${panel ? 'h-20' : 'h-24'} rounded-xl object-cover ring-1 ring-line`}/>
+                            ) : (
+                                <span className='flex h-12 max-w-56 items-center gap-2 rounded-xl bg-tint px-3 text-[12.5px] font-semibold text-ink ring-1 ring-line'>
+                                    <FileText size={15} className='shrink-0 text-accent-text'/><span className='truncate'>{a.name}</span>
+                                </span>
+                            )}
                             <button
                                 type='button'
                                 aria-label='Remove attachment'
@@ -176,7 +270,8 @@ export function Composer({channelId, rootId = '', variant, placeholder, autoFocu
                 rows={1}
                 value={text}
                 placeholder={dictation.listening ? 'Listening…' : placeholder ?? (channelId ? 'Message' : 'Pick a chat first')}
-                onChange={(e) => onChange(e.target.value)}
+                onChange={(e) => onChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+                onBlur={() => window.setTimeout(() => setMention(null), 120)}
                 onKeyDown={onKeyDown}
                 onKeyUp={onKeyUp}
                 onPaste={(e) => {

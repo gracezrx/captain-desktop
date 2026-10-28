@@ -13,7 +13,7 @@ import type {DecisionCard, ModelAttribution, PostProps, PostType, Tier} from '..
 import type {AgentRow} from '../store/agents.js';
 import {type ChannelRow, listChannelMemberIds} from '../store/channels.js';
 import {attachFiles} from '../store/files.js';
-import {getPost, updatePost} from '../store/posts.js';
+import {getPost, softDeletePost, updatePost} from '../store/posts.js';
 import {type ApprovalRow, createApproval, type RunRow, setApprovalPost} from '../store/runs.js';
 import type {UserRow} from '../store/users.js';
 import {AppError} from '../util/errors.js';
@@ -135,6 +135,20 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
         return id;
     };
 
+    const dropPost = async () => {
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+        if (!postId) {
+            return;
+        }
+        const id = postId;
+        postId = null;
+        await softDeletePost(ctx.sql, id);
+        ctx.hub.publish(audience ?? [], {event: 'post_deleted', data: {postId: id, channelId: channel.id}});
+    };
+
     const toolContext = (): ToolContext => ({ctx, agent, agentUser, requester, channel, run, stepId: input.stepId, threadRoot: input.threadRoot, signal: input.signal});
 
     // Ask a person before an action with outside effects. Returns the approval.
@@ -144,7 +158,7 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
             workspaceId: channel.workspaceId, channelId: channel.id, runId: run.id, stepId: input.stepId, agentId: agent.id,
             tool: tool.name, args, toolCallId: call.id, title: d.title, reason: d.reason, fields: d.fields, requestedBy: requester.id,
         });
-        const card: DecisionCard = {approvalId: approval.id, runId: run.id, title: d.title, reason: d.reason, fields: d.fields, tool: tool.name, status: 'pending', decidedBy: null, decidedAt: null};
+        const card: DecisionCard = {approvalId: approval.id, runId: run.id, title: d.title, reason: d.reason, fields: d.fields, tool: tool.name, requestedBy: requester.id, status: 'pending', decidedBy: null, decidedAt: null};
         const post = await savePost(ctx, agentUser, channel, {
             message: `@${requester.username} needs to approve: ${d.title}`,
             rootId: input.threadRoot,
@@ -197,7 +211,12 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
 
     const pause = async (approval: ApprovalRow): Promise<RunnerOutcome> => {
         if (postId) {
-            await finalize(shown && !shown.startsWith('_') ? shown : 'I need a sign-off before I continue.');
+            if (shown && !shown.startsWith('_')) {
+                await finalize(shown);
+            } else {
+                // Nothing was said before the request: the decision card speaks for itself.
+                await dropPost();
+            }
         }
         return {kind: 'waiting', approvalId: approval.id, state: {...state, messages: withoutImageData(state.messages)}, costUsd, modelId: model?.id ?? null};
     };

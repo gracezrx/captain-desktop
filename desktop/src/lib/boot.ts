@@ -1,4 +1,4 @@
-import {loadSession, type Session} from './mm';
+import {loadSession, setUnauthorizedHandler, signOut, type StoredSession} from './api';
 import {startRealtime} from './realtime';
 import {useStore} from './store';
 
@@ -6,11 +6,11 @@ import {useStore} from './store';
 // chat: posts for chats with mentions or unread DMs, plus the most recent few.
 export async function preloadRecent(limit = 8): Promise<void> {
     const s = useStore.getState();
-    const byRecent = Object.values(s.channels).sort((a, b) => b.last_post_at - a.last_post_at);
+    const byRecent = Object.values(s.channels).sort((a, b) => b.lastPostAt - a.lastPostAt);
     const wanted = new Set(byRecent.slice(0, limit).map((c) => c.id));
     for (const c of byRecent) {
         const m = s.members[c.id];
-        if (m && (m.mention_count > 0 || ((c.type === 'D' || c.type === 'G') && c.total_msg_count > m.msg_count))) {
+        if (m && (m.mentionCount > 0 || ((c.type === 'D' || c.type === 'G') && c.totalMsgCount > m.msgCount))) {
             wanted.add(c.id);
         }
     }
@@ -18,11 +18,19 @@ export async function preloadRecent(limit = 8): Promise<void> {
 }
 
 let stopRealtime: (() => void) | null = null;
+let onSignedOut: (() => void) | null = null;
 
-export async function startSession(session: Session): Promise<void> {
+export function whenSignedOut(fn: () => void): void {
+    onSignedOut = fn;
+}
+
+export async function startSession(session: StoredSession): Promise<void> {
+    setUnauthorizedHandler(() => {
+        void endSession();
+    });
     await useStore.getState().bootstrap(session);
     stopRealtime?.();
-    stopRealtime = startRealtime(session);
+    stopRealtime = startRealtime();
     void preloadRecent();
 }
 
@@ -30,6 +38,12 @@ export function stopSession(): void {
     stopRealtime?.();
     stopRealtime = null;
     useStore.getState().reset();
+}
+
+export async function endSession(): Promise<void> {
+    stopSession();
+    await signOut();
+    onSignedOut?.();
 }
 
 export async function resume(): Promise<boolean> {

@@ -1,112 +1,165 @@
-// App state: one Zustand store per window, filled from Mattermost's REST API
-// and kept current by WebSocket events (see realtime.ts).
+// App state: one Zustand store per window, filled from the REST API and kept
+// current by real-time events (realtime.ts).
 
-import type {ChannelMembership, ServerChannel} from '@mattermost/types/channels';
-import type {FileInfo} from '@mattermost/types/files';
-import type {Post} from '@mattermost/types/posts';
-import type {Team} from '@mattermost/types/teams';
-import type {UserProfile} from '@mattermost/types/users';
 import {create} from 'zustand';
 
-import {client, type Session} from './mm';
+import {api, type StoredSession} from './api';
+import type {Agent, Channel, ChannelMember, ClientPost, DecisionCard, ModelInfo, Post, RunStatus, User, Workspace} from './types';
 
-export const DECISION_POST_TYPE = 'custom_captain_decision';
-
-export type Decision = {
-    title: string;
-    reason: string;
-    fields: {label: string; value: string}[];
-    status: 'pending' | 'approved' | 'rejected';
-    decided_by: string;
-    decided_at: number;
-};
-
-export function decisionOf(post: Post | undefined): Decision | null {
-    if (!post || (post.type as string) !== DECISION_POST_TYPE) {
-        return null;
-    }
-    return (post.props?.decision as Decision) ?? null;
-}
-
-export type NeedsYouItem = {
-    channelId: string;
-    postId?: string;
-    kind: 'decision' | 'mention' | 'dm';
-    at: number;
-};
+export type NeedsYouItem = {channelId: string; postId?: string; kind: 'decision' | 'mention' | 'dm'; at: number};
 
 type State = {
-    session: Session | null;
-    me: UserProfile | null;
-    team: Team | null;
-    channels: Record<string, ServerChannel>;
-    members: Record<string, ChannelMembership>;
-    users: Record<string, UserProfile>;
-    posts: Record<string, Post>;
+    session: StoredSession | null;
+    me: User | null;
+    workspaces: Workspace[];
+    workspace: Workspace | null;
+    channels: Record<string, Channel>;
+    members: Record<string, ChannelMember>;
+    users: Record<string, User>;
+    agents: Record<string, Agent>; // by agent id
+    models: ModelInfo[];
+    demoMode: boolean;
+    posts: Record<string, ClientPost>;
     postsByChannel: Record<string, string[]>; // oldest first, root posts and replies
     loadedChannels: Record<string, boolean>;
+    hasMore: Record<string, boolean>;
+    streams: Record<string, string>; // post id -> text an agent is still writing
+    runs: Record<string, RunStatus>;
     typing: Record<string, {userId: string; until: number}>;
     activeChannelId: string | null;
+    threadRootId: string | null; // the thread open beside the chat
     lastUsedChannelId: string | null;
     connection: 'connecting' | 'online' | 'offline';
     ready: boolean;
 };
 
 type Actions = {
-    bootstrap: (session: Session) => Promise<void>;
+    bootstrap: (session: StoredSession) => Promise<void>;
+    switchWorkspace: (id: string) => Promise<void>;
+    refreshAgents: () => Promise<void>;
     reset: () => void;
     loadPosts: (channelId: string) => Promise<void>;
+    loadOlder: (channelId: string) => Promise<void>;
+    loadThread: (rootId: string) => Promise<void>;
     ensureUsers: (ids: string[]) => Promise<void>;
-    receivePost: (post: Post, opts?: {fromOthers?: boolean; mentionsMe?: boolean}) => void;
-    updatePost: (post: Post) => void;
+    ensureChannel: (channelId: string) => Promise<void>;
+    receivePost: (post: ClientPost, opts?: {mentionsMe?: boolean}) => void;
+    updatePost: (post: ClientPost) => void;
+    removePost: (postId: string) => void;
     mergePosts: (posts: Post[]) => void;
+    setStream: (postId: string, text: string) => void;
+    addChannel: (channel: Channel, member?: ChannelMember) => void;
+    dropChannel: (channelId: string) => void;
     setActiveChannel: (channelId: string | null) => void;
+    openThread: (rootId: string | null) => void;
     markViewed: (channelId: string) => Promise<void>;
     setTyping: (channelId: string, userId: string) => void;
+    clearTyping: (channelId: string, userId: string) => void;
     setConnection: (c: State['connection']) => void;
     rememberChannel: (channelId: string) => void;
 };
 
+function read(key: string): string | null {
+    try {
+        return localStorage.getItem(key);
+    } catch {
+        return null;
+    }
+}
+
+function write(key: string, value: string): void {
+    try {
+        localStorage.setItem(key, value);
+    } catch {
+        // private mode: not remembered, which is fine
+    }
+}
+
 const initial: State = {
     session: null,
     me: null,
-    team: null,
+    workspaces: [],
+    workspace: null,
     channels: {},
     members: {},
     users: {},
+    agents: {},
+    models: [],
+    demoMode: false,
     posts: {},
     postsByChannel: {},
     loadedChannels: {},
+    hasMore: {},
+    streams: {},
+    runs: {},
     typing: {},
     activeChannelId: null,
-    lastUsedChannelId: localStorage.getItem('captain.lastChannel'),
+    threadRootId: null,
+    lastUsedChannelId: read('captain.lastChannel'),
     connection: 'connecting',
     ready: false,
 };
+
+function sortIds(ids: string[], posts: Record<string, ClientPost>): string[] {
+    return [...new Set(ids)].filter((id) => posts[id]).sort((a, b) => posts[a].createdAt - posts[b].createdAt);
+}
 
 export const useStore = create<State & Actions>((set, get) => ({
     ...initial,
 
     async bootstrap(session) {
         set({session});
-        const me = await client.getMe();
-        const teams = await client.getMyTeams();
-        const team = teams[0] ?? null;
-        let channels: ServerChannel[] = [];
-        let members: ChannelMembership[] = [];
-        if (team) {
-            [channels, members] = await Promise.all([client.getMyChannels(team.id), client.getMyChannelMembers(team.id)]);
+        const [me, workspaces] = await Promise.all([api.me(), api.workspaces()]);
+        set({me, users: {...get().users, [me.id]: me}, workspaces});
+        const wanted = read('captain.workspace');
+        const ws = workspaces.find((w) => w.id === wanted) ?? workspaces[0] ?? null;
+        if (ws) {
+            await get().switchWorkspace(ws.id);
+        } else {
+            set({workspace: null, ready: true});
         }
-        const dmUserIds = channels.filter((c) => c.type === 'D').map((c) => otherUserId(c, me.id)).filter(Boolean);
+    },
+
+    async switchWorkspace(id) {
+        const ws = get().workspaces.find((w) => w.id === id) ?? (await api.workspaces()).find((w) => w.id === id);
+        if (!ws) {
+            return;
+        }
+        write('captain.workspace', id);
+        const [{channels, members}, {agents}, people, models] = await Promise.all([
+            api.channels(id), api.agents(id), api.members(id), api.models(id).catch(() => ({models: [], demoMode: false})),
+        ]);
+        const me = get().me;
         set({
-            me,
-            team,
-            channels: Object.fromEntries(channels.filter((c) => !c.delete_at).map((c) => [c.id, c])),
-            members: Object.fromEntries(members.map((m) => [m.channel_id, m])),
-            users: {[me.id]: me},
+            workspace: ws,
+            channels: Object.fromEntries(channels.map((c) => [c.id, c])),
+            members: Object.fromEntries(members.map((m) => [m.channelId, m])),
+            agents: Object.fromEntries(agents.map((a) => [a.id, a])),
+            users: {...Object.fromEntries(people.users.map((u) => [u.id, u])), ...(me ? {[me.id]: me} : {})},
+            models: models.models,
+            demoMode: models.demoMode,
+            posts: {},
+            postsByChannel: {},
+            loadedChannels: {},
+            hasMore: {},
+            streams: {},
+            activeChannelId: get().activeChannelId && channels.some((c) => c.id === get().activeChannelId) ? get().activeChannelId : null,
+            threadRootId: null,
             ready: true,
         });
-        await get().ensureUsers(dmUserIds);
+        // Decisions waiting in channels we haven't opened yet.
+        const approvals = await api.approvals(id).catch(() => []);
+        const posts = await Promise.all(approvals.filter((a) => a.postId).map((a) => api.post(a.postId!).catch(() => null)));
+        get().mergePosts(posts.filter((p): p is Post => Boolean(p)));
+    },
+
+    async refreshAgents() {
+        const ws = get().workspace;
+        if (!ws) {
+            return;
+        }
+        const [{agents}, people] = await Promise.all([api.agents(ws.id), api.members(ws.id)]);
+        set((s) => ({agents: Object.fromEntries(agents.map((a) => [a.id, a])), users: {...s.users, ...Object.fromEntries(people.users.map((u) => [u.id, u]))}}));
     },
 
     reset() {
@@ -114,21 +167,25 @@ export const useStore = create<State & Actions>((set, get) => ({
     },
 
     async loadPosts(channelId) {
-        const list = await client.getPosts(channelId, 0, 60);
-        const posts = list.order.map((id) => list.posts[id]).filter(Boolean);
-        set((s) => {
-            const all = {...s.posts};
-            for (const p of posts) {
-                all[p.id] = p;
-            }
-            const ids = new Set([...(s.postsByChannel[channelId] ?? []), ...posts.map((p) => p.id)]);
-            return {
-                posts: all,
-                postsByChannel: {...s.postsByChannel, [channelId]: sortIds([...ids], all)},
-                loadedChannels: {...s.loadedChannels, [channelId]: true},
-            };
-        });
-        await get().ensureUsers(posts.map((p) => p.user_id));
+        const list = await api.posts(channelId);
+        get().mergePosts(list);
+        set((s) => ({loadedChannels: {...s.loadedChannels, [channelId]: true}, hasMore: {...s.hasMore, [channelId]: list.length >= 60}}));
+    },
+
+    async loadOlder(channelId) {
+        const s = get();
+        const ids = s.postsByChannel[channelId] ?? [];
+        const oldest = ids.map((id) => s.posts[id]).find((p) => p && !p.rootId);
+        if (!oldest) {
+            return;
+        }
+        const list = await api.posts(channelId, oldest.createdAt);
+        get().mergePosts(list);
+        set((st) => ({hasMore: {...st.hasMore, [channelId]: list.length >= 60}}));
+    },
+
+    async loadThread(rootId) {
+        get().mergePosts(await api.thread(rootId));
     },
 
     async ensureUsers(ids) {
@@ -136,61 +193,100 @@ export const useStore = create<State & Actions>((set, get) => ({
         if (!missing.length) {
             return;
         }
-        const profiles = await client.getProfilesByIds(missing).catch(() => []);
-        set((s) => ({users: {...s.users, ...Object.fromEntries(profiles.map((u) => [u.id, u]))}}));
+        const users = await api.users(missing).catch(() => []);
+        set((s) => ({users: {...s.users, ...Object.fromEntries(users.map((u) => [u.id, u]))}}));
+    },
+
+    async ensureChannel(channelId) {
+        if (get().channels[channelId]) {
+            return;
+        }
+        const ws = get().workspace;
+        const channel = await api.channel(channelId).catch(() => null);
+        if (!channel || channel.workspaceId !== ws?.id) {
+            return;
+        }
+        const {members} = await api.channels(ws.id);
+        get().addChannel(channel, members.find((m) => m.channelId === channelId));
+        await get().ensureUsers(channel.memberIds ?? []);
     },
 
     receivePost(post, opts = {}) {
         const s = get();
-        // A post we already have, or the server's copy of one we sent optimistically.
-        const known = Boolean(s.posts[post.id]) || Boolean(post.pending_post_id && post.pending_post_id !== post.id && s.posts[post.pending_post_id]);
+        if (post.workspaceId && s.workspace && post.workspaceId !== s.workspace.id) {
+            return;
+        }
+        const known = Boolean(s.posts[post.id]) || Boolean(post.pendingId && s.posts[post.pendingId] && post.pendingId !== post.id && !s.posts[post.pendingId].pending);
         set((st) => {
-            const all = {...st.posts, [post.id]: post};
-            // Replace an optimistic copy sent from this window.
-            let ids = (st.postsByChannel[post.channel_id] ?? []).filter((id) => {
-                const p = st.posts[id];
-                return !(p && post.pending_post_id && p.id === post.pending_post_id);
-            });
-            if (post.pending_post_id) {
-                delete all[post.pending_post_id];
+            const all: Record<string, ClientPost> = {...st.posts, [post.id]: post};
+            let ids = st.postsByChannel[post.channelId] ?? [];
+            // Swap our optimistic copy for the server's.
+            if (post.pendingId && post.pendingId !== post.id && st.posts[post.pendingId]) {
+                delete all[post.pendingId];
+                ids = ids.filter((id) => id !== post.pendingId);
             }
-            if (!ids.includes(post.id)) {
-                ids = sortIds([...ids, post.id], all);
-            }
-            const channel = st.channels[post.channel_id];
-            const channels = channel ? {...st.channels, [channel.id]: {...channel, last_post_at: Math.max(channel.last_post_at, post.create_at), total_msg_count: channel.total_msg_count + (known ? 0 : 1)}} : st.channels;
+            const channel = st.channels[post.channelId];
+            const fresh = !st.posts[post.id] && !post.pending;
+            const channels = channel && fresh ? {...st.channels, [channel.id]: {...channel, lastPostAt: Math.max(channel.lastPostAt, post.createdAt), totalMsgCount: channel.totalMsgCount + 1}} : st.channels;
             let members = st.members;
-            const m = st.members[post.channel_id];
-            if (m && !known) {
-                const viewing = st.activeChannelId === post.channel_id && document.hasFocus();
-                const mine = post.user_id === st.me?.id;
-                members = {...st.members, [m.channel_id]: {
+            const m = st.members[post.channelId];
+            if (m && fresh) {
+                const viewing = st.activeChannelId === post.channelId && document.hasFocus();
+                const mine = post.userId === st.me?.id;
+                members = {...st.members, [m.channelId]: {
                     ...m,
-                    msg_count: mine || viewing ? m.msg_count + 1 : m.msg_count,
-                    mention_count: !mine && !viewing && opts.mentionsMe ? m.mention_count + 1 : m.mention_count,
+                    msgCount: mine || viewing ? m.msgCount + 1 : m.msgCount,
+                    mentionCount: !mine && !viewing && opts.mentionsMe ? m.mentionCount + 1 : m.mentionCount,
                 }};
             }
-            return {posts: all, postsByChannel: {...st.postsByChannel, [post.channel_id]: ids}, channels, members};
+            // A reply bumps its thread.
+            if (post.rootId && all[post.rootId] && fresh) {
+                const root = all[post.rootId];
+                all[post.rootId] = {...root, replyCount: root.replyCount + 1, lastReplyAt: post.createdAt};
+            }
+            return {posts: all, postsByChannel: {...st.postsByChannel, [post.channelId]: sortIds([...ids, post.id], all)}, channels, members};
         });
-        if (post.root_id && s.posts[post.root_id] && !known) {
-            const root = s.posts[post.root_id];
-            get().updatePost({...root, reply_count: (root.reply_count ?? 0) + 1, last_reply_at: post.create_at});
+        if (!known && !s.users[post.userId]) {
+            void get().ensureUsers([post.userId]);
         }
-        if (!s.users[post.user_id]) {
-            void get().ensureUsers([post.user_id]);
-        }
-        if (!s.channels[post.channel_id]) {
-            // A new DM or a channel we were just added to.
-            void client.getChannel(post.channel_id).then((c) => set((st) => ({channels: {...st.channels, [c.id]: c}}))).catch(() => undefined);
-            void client.getMyChannelMember(post.channel_id).then((m) => set((st) => ({members: {...st.members, [m.channel_id]: m}}))).catch(() => undefined);
+        if (!s.channels[post.channelId]) {
+            void get().ensureChannel(post.channelId);
         }
     },
 
     updatePost(post) {
-        set((s) => ({posts: {...s.posts, [post.id]: {...s.posts[post.id], ...post}}}));
+        set((s) => {
+            if (!s.posts[post.id]) {
+                return {};
+            }
+            const streams = {...s.streams};
+            if (!post.props.streaming) {
+                delete streams[post.id];
+            }
+            return {posts: {...s.posts, [post.id]: {...s.posts[post.id], ...post}}, streams};
+        });
     },
 
-    // Add fetched history (e.g. a thread) without touching unread counts.
+    removePost(postId) {
+        set((s) => {
+            const p = s.posts[postId];
+            if (!p) {
+                return {};
+            }
+            const all = {...s.posts};
+            delete all[postId];
+            if (p.rootId && all[p.rootId]) {
+                all[p.rootId] = {...all[p.rootId], replyCount: Math.max(0, all[p.rootId].replyCount - 1)};
+            }
+            return {
+                posts: all,
+                postsByChannel: {...s.postsByChannel, [p.channelId]: (s.postsByChannel[p.channelId] ?? []).filter((id) => id !== postId)},
+                threadRootId: s.threadRootId === postId ? null : s.threadRootId,
+            };
+        });
+    },
+
+    // Add fetched history without touching unread counts.
     mergePosts(list) {
         if (!list.length) {
             return;
@@ -199,41 +295,79 @@ export const useStore = create<State & Actions>((set, get) => ({
             const all = {...s.posts};
             const byChannel = {...s.postsByChannel};
             for (const p of list) {
-                all[p.id] = p;
-                const ids = byChannel[p.channel_id] ?? [];
-                if (!ids.includes(p.id)) {
-                    byChannel[p.channel_id] = [...ids, p.id];
-                }
+                all[p.id] = {...all[p.id], ...p};
+                byChannel[p.channelId] = [...(byChannel[p.channelId] ?? []), p.id];
             }
-            for (const id of new Set(list.map((p) => p.channel_id))) {
+            for (const id of new Set(list.map((p) => p.channelId))) {
                 byChannel[id] = sortIds(byChannel[id], all);
             }
             return {posts: all, postsByChannel: byChannel};
         });
-        void get().ensureUsers(list.map((p) => p.user_id));
+        void get().ensureUsers(list.map((p) => p.userId));
+    },
+
+    setStream(postId, text) {
+        set((s) => (s.posts[postId]?.props.streaming === false ? {} : {streams: {...s.streams, [postId]: text}}));
+    },
+
+    addChannel(channel, member) {
+        set((s) => ({
+            channels: {...s.channels, [channel.id]: channel},
+            members: member ? {...s.members, [channel.id]: member} : s.members[channel.id] ? s.members : {
+                ...s.members,
+                [channel.id]: {channelId: channel.id, userId: s.me?.id ?? '', role: 'member', lastViewedAt: Date.now(), msgCount: channel.totalMsgCount, mentionCount: 0},
+            },
+        }));
+    },
+
+    dropChannel(channelId) {
+        set((s) => {
+            const channels = {...s.channels};
+            const members = {...s.members};
+            delete channels[channelId];
+            delete members[channelId];
+            return {channels, members, activeChannelId: s.activeChannelId === channelId ? null : s.activeChannelId};
+        });
     },
 
     setActiveChannel(channelId) {
-        set({activeChannelId: channelId});
+        set({activeChannelId: channelId, threadRootId: null});
         if (channelId) {
             get().rememberChannel(channelId);
         }
     },
 
+    openThread(rootId) {
+        set({threadRootId: rootId});
+        if (rootId) {
+            void get().loadThread(rootId).catch(() => undefined);
+        }
+    },
+
     async markViewed(channelId) {
-        set((s) => {
-            const m = s.members[channelId];
-            const c = s.channels[channelId];
-            if (!m || !c) {
-                return {};
-            }
-            return {members: {...s.members, [channelId]: {...m, msg_count: c.total_msg_count, mention_count: 0, last_viewed_at: Date.now()}}};
-        });
-        await client.viewMyChannel(channelId).catch(() => undefined);
+        const s = get();
+        const m = s.members[channelId];
+        const c = s.channels[channelId];
+        if (!m || !c || (m.msgCount >= c.totalMsgCount && m.mentionCount === 0)) {
+            return;
+        }
+        set((st) => ({members: {...st.members, [channelId]: {...m, msgCount: c.totalMsgCount, mentionCount: 0, lastViewedAt: Date.now()}}}));
+        await api.viewChannel(channelId).catch(() => undefined);
     },
 
     setTyping(channelId, userId) {
         set((s) => ({typing: {...s.typing, [channelId]: {userId, until: Date.now() + 5000}}}));
+    },
+
+    clearTyping(channelId, userId) {
+        set((s) => {
+            if (s.typing[channelId]?.userId !== userId) {
+                return {};
+            }
+            const typing = {...s.typing};
+            delete typing[channelId];
+            return {typing};
+        });
     },
 
     setConnection(connection) {
@@ -241,63 +375,67 @@ export const useStore = create<State & Actions>((set, get) => ({
     },
 
     rememberChannel(channelId) {
-        localStorage.setItem('captain.lastChannel', channelId);
+        write('captain.lastChannel', channelId);
         set({lastUsedChannelId: channelId});
     },
 }));
 
-function sortIds(ids: string[], posts: Record<string, Post>): string[] {
-    return ids.filter((id) => posts[id]).sort((a, b) => posts[a].create_at - posts[b].create_at);
-}
-
 // ------------------------------------------------------------ derived helpers
 
-export function otherUserId(channel: ServerChannel, meId: string): string {
+export function decisionOf(post: Post | undefined): DecisionCard | null {
+    return post?.type === 'decision' ? post.props.decision ?? null : null;
+}
+
+export function otherUserId(channel: Channel, meId: string): string {
     if (channel.type !== 'D') {
         return '';
     }
-    const [a, b] = channel.name.split('__');
-    return a === meId ? b : a;
+    return channel.memberIds?.find((id) => id !== meId) ?? channel.name.split('__').find((id) => id !== meId) ?? meId;
 }
 
-export function displayName(user: UserProfile | undefined): string {
-    if (!user) {
-        return 'Someone';
-    }
-    const full = [user.first_name, user.last_name].filter(Boolean).join(' ');
-    return full || user.nickname || user.username;
+export function displayName(user: User | undefined): string {
+    return user ? user.displayName || user.username : 'Someone';
 }
 
-export function channelTitle(channel: ServerChannel | undefined, meId: string | undefined, users: Record<string, UserProfile>): string {
+export function channelTitle(channel: Channel | undefined, meId: string | undefined, users: Record<string, User>): string {
     if (!channel) {
         return '';
     }
     if (channel.type === 'D' && meId) {
-        return displayName(users[otherUserId(channel, meId)]);
+        const other = otherUserId(channel, meId);
+        return other === meId ? `${displayName(users[meId])} (you)` : displayName(users[other]);
     }
-    return channel.display_name || channel.name;
-}
-
-export function isAgentChannel(channel: ServerChannel, meId: string, users: Record<string, UserProfile>): boolean {
-    return channel.type === 'D' && Boolean(users[otherUserId(channel, meId)]?.is_bot);
-}
-
-export function unreadCount(channel: ServerChannel, member: ChannelMembership | undefined): number {
-    if (!member) {
-        return 0;
+    if (channel.type === 'G' && meId) {
+        return (channel.memberIds ?? []).filter((id) => id !== meId).map((id) => displayName(users[id]).split(' ')[0]).join(', ') || 'Group';
     }
-    return Math.max(0, channel.total_msg_count - member.msg_count);
+    return channel.displayName || channel.name;
 }
 
-// What needs you: pending decision cards, mentions and unread DMs, newest first.
-export function needsYou(state: Pick<State, 'channels' | 'members' | 'posts' | 'postsByChannel' | 'me' | 'users'>): NeedsYouItem[] {
+export function agentForUser(agents: Record<string, Agent>, userId: string | undefined): Agent | undefined {
+    return userId ? Object.values(agents).find((a) => a.userId === userId) : undefined;
+}
+
+export function isAgentChannel(channel: Channel, meId: string, users: Record<string, User>): boolean {
+    return channel.type === 'D' && Boolean(users[otherUserId(channel, meId)]?.isBot);
+}
+
+export function unreadCount(channel: Channel, member: ChannelMember | undefined): number {
+    return member ? Math.max(0, channel.totalMsgCount - member.msgCount) : 0;
+}
+
+export function canDecide(card: DecisionCard, me: User | null, workspace: Workspace | null): boolean {
+    return Boolean(me && (card.requestedBy === me.id || workspace?.role === 'owner' || workspace?.role === 'admin'));
+}
+
+// What needs you: decisions you can make, mentions and unread DMs, newest first.
+export function needsYou(state: Pick<State, 'channels' | 'members' | 'posts' | 'postsByChannel' | 'me' | 'workspace'>): NeedsYouItem[] {
     const items: NeedsYouItem[] = [];
     const seen = new Set<string>();
     for (const post of Object.values(state.posts)) {
         const d = decisionOf(post);
-        if (d?.status === 'pending' && state.channels[post.channel_id]) {
-            items.push({channelId: post.channel_id, postId: post.id, kind: 'decision', at: post.create_at});
-            seen.add(post.channel_id);
+        if (d?.status === 'pending' && state.channels[post.channelId] && canDecide(d, state.me, state.workspace)) {
+            items.push({channelId: post.channelId, postId: post.id, kind: 'decision', at: post.createdAt});
+            seen.add(post.channelId);
         }
     }
     for (const channel of Object.values(state.channels)) {
@@ -306,19 +444,18 @@ export function needsYou(state: Pick<State, 'channels' | 'members' | 'posts' | '
             continue;
         }
         const isDm = channel.type === 'D' || channel.type === 'G';
-        if (m.mention_count > 0 || (isDm && unreadCount(channel, m) > 0)) {
+        if (m.mentionCount > 0 || (isDm && unreadCount(channel, m) > 0)) {
             const ids = state.postsByChannel[channel.id] ?? [];
-            const latest = [...ids].reverse().find((id) => state.posts[id]?.user_id !== state.me?.id);
-            items.push({channelId: channel.id, postId: latest, kind: isDm ? 'dm' : 'mention', at: channel.last_post_at});
+            const latest = [...ids].reverse().find((id) => state.posts[id]?.userId !== state.me?.id);
+            items.push({channelId: channel.id, postId: latest, kind: isDm ? 'dm' : 'mention', at: channel.lastPostAt});
         }
     }
     return items.sort((a, b) => b.at - a.at);
 }
 
-export function fileInfosOf(post: Post): FileInfo[] {
-    const fromMeta = (post.metadata as {files?: FileInfo[]} | undefined)?.files;
-    if (fromMeta?.length) {
-        return fromMeta;
+export function modelLabel(models: ModelInfo[], id: string): string {
+    if (id === 'demo') {
+        return 'Demo model';
     }
-    return (post.file_ids ?? []).map((id) => ({id, name: 'image', extension: 'png', mime_type: 'image/png', has_preview_image: true} as FileInfo));
+    return models.find((m) => m.id === id)?.label ?? id;
 }

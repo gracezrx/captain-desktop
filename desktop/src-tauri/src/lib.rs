@@ -3,7 +3,7 @@
 //! notifications that open the right thread, and the Keychain.
 //!
 //! Everything else (chats, messages, decisions) lives in the web view and
-//! talks to Mattermost directly.
+//! talks to the Captain server directly (REST and one WebSocket).
 
 use std::sync::Mutex;
 use std::time::Duration;

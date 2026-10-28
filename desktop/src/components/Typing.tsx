@@ -18,14 +18,20 @@ export function Typing({channelId}: {channelId: string}) {
         <div className='h-6 px-2 text-[12px] text-muted' aria-live='polite'>
             {visible && (
                 <span className='inline-flex items-center gap-1.5'>
-                    <span className='flex gap-0.5'>
-                        <span className='size-1 rounded-full bg-muted'/>
-                        <span className='size-1 rounded-full bg-muted opacity-70'/>
-                        <span className='size-1 rounded-full bg-muted opacity-40'/>
-                    </span>
-                    {displayName(user)} is {user?.is_bot ? 'working' : 'typing'}…
+                    <Dots/>
+                    {displayName(user)} is typing…
                 </span>
             )}
         </div>
+    );
+}
+
+export function Dots() {
+    return (
+        <span className='flex gap-0.5' aria-hidden>
+            <span className='dot size-1 rounded-full bg-muted'/>
+            <span className='dot size-1 rounded-full bg-muted' style={{animationDelay: '150ms'}}/>
+            <span className='dot size-1 rounded-full bg-muted' style={{animationDelay: '300ms'}}/>
+        </span>
     );
 }

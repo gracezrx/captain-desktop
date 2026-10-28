@@ -7,13 +7,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "mock": "npm --prefix ../dev start",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev:server": "npm --prefix ../server run dev"
   },
   "dependencies": {
     "@fontsource-variable/manrope": "^5.3.0",
-    "@mattermost/client": "^11.9.0",
-    "@mattermost/types": "^11.9.0",
     "@tauri-apps/api": "^2.12.4",
     "lucide-react": "^1.63.0",
     "react": "^19.3.1",

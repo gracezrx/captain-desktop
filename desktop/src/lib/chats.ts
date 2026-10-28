@@ -1,9 +1,8 @@
-import type {ServerChannel} from '@mattermost/types/channels';
-
 import {channelTitle, isAgentChannel, unreadCount, useStore} from './store';
+import type {Channel} from './types';
 
 export type ChatKind = 'agent' | 'channel' | 'dm';
-export type ChatEntry = {channel: ServerChannel; title: string; kind: ChatKind; unread: number; mentions: number};
+export type ChatEntry = {channel: Channel; title: string; kind: ChatKind; unread: number; mentions: number};
 
 // Every chat you're in, most recently active first.
 export function useChats(): ChatEntry[] {
@@ -20,7 +19,7 @@ export function useChats(): ChatEntry[] {
             title: channelTitle(channel, me.id, users),
             kind: (isAgentChannel(channel, me.id, users) ? 'agent' : channel.type === 'D' || channel.type === 'G' ? 'dm' : 'channel') as ChatKind,
             unread: unreadCount(channel, members[channel.id]),
-            mentions: members[channel.id]?.mention_count ?? 0,
+            mentions: members[channel.id]?.mentionCount ?? 0,
         })).
-        sort((a, b) => b.channel.last_post_at - a.channel.last_post_at);
+        sort((a, b) => (b.channel.lastPostAt || b.channel.createdAt) - (a.channel.lastPostAt || a.channel.createdAt));
 }

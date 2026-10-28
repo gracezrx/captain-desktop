@@ -141,17 +141,17 @@ export async function setPanelHeight(height: number): Promise<void> {
 
 // ------------------------------------------------------------ events between windows
 
-// The dashboard window owns the one Mattermost WebSocket and relays each
+// The dashboard window owns the one WebSocket and relays each
 // event to the panel, so the app keeps a single connection.
 export async function relayToPanel(event: unknown): Promise<void> {
     if (isTauri) {
-        await emitTo('panel', 'mm-event', event).catch(() => undefined);
+        await emitTo('panel', 'captain-event', event).catch(() => undefined);
     }
 }
 
 export function onRelayedEvent(handler: (event: unknown) => void): () => void {
     let un: UnlistenFn | undefined;
-    listen('mm-event', (e) => handler(e.payload)).then((u) => {
+    listen('captain-event', (e) => handler(e.payload)).then((u) => {
         un = u;
     });
     return () => un?.();

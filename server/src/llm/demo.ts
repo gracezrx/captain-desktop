@@ -58,6 +58,12 @@ function reply(system: string, messages: ChatMessage[], ask: string): string {
         if (/rejected/i.test(lastToolResult)) {
             return `Understood, I won't do that. Tell me what you'd like to change.${NOTE}`;
         }
+        if (/nothing was sent/i.test(lastToolResult)) {
+            return `Approved, but this server has no email account yet (\`SMTP_URL\`), so nothing was sent. Copy the draft above and send it yourself.${NOTE}`;
+        }
+        if (/^Created "/.test(lastToolResult)) {
+            return `Here's the draft, attached as a document.${NOTE}`;
+        }
         return `Done. ${lastToolResult.slice(0, 300)}${NOTE}`;
     }
     if (/ROLE: SYNTHESIS/.test(system)) {

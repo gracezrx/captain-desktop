@@ -1,44 +1,52 @@
-import type {UserProfile} from '@mattermost/types/users';
+import type {User} from '../lib/types';
 
-const PORTRAITS = ['fox', 'owl', 'panda', 'rabbit', 'cat', 'penguin'];
+export const PORTRAITS = ['fox', 'owl', 'panda', 'rabbit', 'cat', 'penguin'];
 
-function portraitFor(user: UserProfile): string {
-    const chosen = (user.props as Record<string, string> | undefined)?.portrait;
-    if (chosen && PORTRAITS.includes(chosen)) {
-        return chosen;
+export function portraitSrc(portrait: string | null | undefined, fallbackKey = ''): string {
+    if (portrait === 'captain') {
+        return '/captain-mark.png';
+    }
+    if (portrait && PORTRAITS.includes(portrait)) {
+        return `/agents/${portrait}.png`;
     }
     let h = 0;
-    for (const ch of user.username) {
+    for (const ch of fallbackKey) {
         h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     }
-    return PORTRAITS[h % PORTRAITS.length];
+    return `/agents/${PORTRAITS[h % PORTRAITS.length]}.png`;
 }
 
-function initials(user: UserProfile): string {
-    const a = user.first_name || user.username;
-    return ((a[0] ?? '?') + (user.last_name?.[0] ?? '')).toUpperCase();
+function initials(user: User): string {
+    const parts = (user.displayName || user.username).trim().split(/\s+/);
+    return ((parts[0]?.[0] ?? '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }
 
-type Props = {user?: UserProfile; size?: number; className?: string};
+// A stable, friendly color per person.
+const TONES = ['#3a6fd8', '#6a5cd6', '#1f9d8b', '#d0703c', '#c2477a', '#2f8fd1', '#7a8f2a'];
+function toneFor(id: string): string {
+    let h = 0;
+    for (const ch of id) {
+        h = (h * 33 + ch.charCodeAt(0)) >>> 0;
+    }
+    return TONES[h % TONES.length];
+}
 
-// People get initials on royal blue; agents get Captain's animal portraits,
-// and the Captain agent itself gets the anchor mark.
+type Props = {user?: User; size?: number; className?: string};
+
+// People get initials on a color of their own; agents get Captain's animal
+// portraits, and the Captain coordinator the anchor mark.
 export function Avatar({user, size = 32, className = ''}: Props) {
-    const style = {width: size, height: size, borderRadius: Math.round(size * 0.3)};
+    const style = {width: size, height: size, borderRadius: Math.round(size * 0.32)};
     if (!user) {
         return <span className={`inline-block shrink-0 bg-tint ${className}`} style={style}/>;
     }
-    if (user.is_bot) {
-        const isCaptain = user.username === 'captain';
+    if (user.isBot) {
+        const isCaptain = user.portrait === 'captain';
         return (
-            <span
-                className={`inline-flex shrink-0 items-center justify-center overflow-hidden bg-white ring-1 ring-line ${className}`}
-                style={style}
-                aria-hidden
-            >
+            <span className={`inline-flex shrink-0 items-center justify-center overflow-hidden bg-white ring-1 ring-line ${className}`} style={style} aria-hidden>
                 <img
-                    src={isCaptain ? '/captain-mark.png' : `/agents/${portraitFor(user)}.png`}
-                    alt=""
+                    src={portraitSrc(user.portrait, user.username)}
+                    alt=''
                     width={size}
                     height={size}
                     style={{width: isCaptain ? '72%' : '100%', height: isCaptain ? '72%' : '100%', objectFit: 'contain'}}
@@ -49,8 +57,8 @@ export function Avatar({user, size = 32, className = ''}: Props) {
     }
     return (
         <span
-            className={`inline-flex shrink-0 items-center justify-center bg-royal font-semibold text-white ${className}`}
-            style={{...style, fontSize: Math.round(size * 0.4)}}
+            className={`inline-flex shrink-0 items-center justify-center font-bold text-white ${className}`}
+            style={{...style, fontSize: Math.round(size * 0.38), background: toneFor(user.id)}}
             aria-hidden
         >
             {initials(user)}
