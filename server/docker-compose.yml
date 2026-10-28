@@ -1,0 +1,78 @@
+# Captain's backend: stock Mattermost + Postgres, and the Captain bridge that
+# runs the agents as Mattermost bots. Start everything with ./start.sh
+# (first run creates the team, channels and bots and writes their tokens to .env).
+
+name: captain
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mmuser
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: mattermost
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmuser -d mattermost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mattermost:
+    # Pin a version for anything beyond local development (see docs.mattermost.com).
+    image: mattermost/mattermost-team-edition:${MATTERMOST_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8065:8065"
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: postgres://mmuser:${POSTGRES_PASSWORD}@postgres:5432/mattermost?sslmode=disable&connect_timeout=10
+      MM_SERVICESETTINGS_SITEURL: ${MM_SITE_URL:-http://localhost:8065}
+      # The desktop app's origins (release build, and the dev server).
+      MM_SERVICESETTINGS_ALLOWCORSFROM: "tauri://localhost http://tauri.localhost http://localhost:1420"
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      # Lets Approve / Reject buttons call the bridge on the Docker network.
+      MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: "bridge"
+      MM_SERVICESETTINGS_ENABLEPOSTUSERNAMEOVERRIDE: "false"
+      MM_TEAMSETTINGS_ENABLEOPENSERVER: "false"
+      MM_LOGSETTINGS_CONSOLELEVEL: "INFO"
+    volumes:
+      - mmdata:/mattermost/data
+      - mmconfig:/mattermost/config
+      - mmlogs:/mattermost/logs
+      - mmplugins:/mattermost/plugins
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8065/api/v4/system/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  bridge:
+    build: ../bridge
+    restart: unless-stopped
+    depends_on:
+      - mattermost
+    environment:
+      MM_URL: http://mattermost:8065
+      BRIDGE_PUBLIC_URL: http://bridge:8787
+      BRIDGE_SECRET: ${BRIDGE_SECRET:?set BRIDGE_SECRET in .env}
+      AGENT_TOKENS: ${AGENT_TOKENS:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-auto}
+      LLM_VISION_MODEL: ${LLM_VISION_MODEL:-}
+    ports:
+      - "8787:8787"
+
+volumes:
+  pgdata:
+  mmdata:
+  mmconfig:
+  mmlogs:
+  mmplugins:

@@ -1,0 +1,25 @@
+import type {ServerChannel} from '@mattermost/types/channels';
+import {Hash, Lock, Users} from 'lucide-react';
+
+import {otherUserId, useStore} from '../lib/store';
+
+import {Avatar} from './Avatar';
+
+// DMs show the other person's (or agent's) avatar; channels a soft tile.
+export function ChatIcon({channel, size = 28}: {channel: ServerChannel; size?: number}) {
+    const me = useStore((s) => s.me);
+    const other = useStore((s) => (channel.type === 'D' && me ? s.users[otherUserId(channel, me.id)] : undefined));
+    if (channel.type === 'D') {
+        return <Avatar user={other} size={size}/>;
+    }
+    const Icon = channel.type === 'P' ? Lock : channel.type === 'G' ? Users : Hash;
+    return (
+        <span
+            className='grid shrink-0 place-items-center bg-tint text-accent-text'
+            style={{width: size, height: size, borderRadius: Math.round(size * 0.3)}}
+            aria-hidden
+        >
+            <Icon size={Math.round(size * 0.5)} strokeWidth={2.25}/>
+        </span>
+    );
+}

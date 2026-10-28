@@ -1,0 +1,8 @@
+{
+  "name": "captain-dev-mock",
+  "private": true,
+  "type": "module",
+  "description": "A stand-in Mattermost server for UI development",
+  "scripts": {"start": "node mock-mattermost.mjs"},
+  "dependencies": {"busboy": "1.6.0", "ws": "8.22.0"}
+}

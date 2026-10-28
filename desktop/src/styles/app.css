@@ -1,0 +1,238 @@
+@import "tailwindcss";
+@import "@fontsource-variable/manrope";
+
+/*
+ * Captain Desktop "light" tokens. Derived from Captain's brand (navy ink
+ * #142769, Captain blue, gold for decisions) but lighter and younger than
+ * the web app's Classic theme: white and frosted surfaces instead of a navy
+ * rail, a brighter blue accent, rounder shapes, softer shadows.
+ */
+:root {
+  color-scheme: light;
+
+  /* sidebar: frosted, near-white with a breath of blue */
+  --rail-bg: #f4f7fd;
+  --panel-bg: #ffffff;
+  --nav-line: #e6ecf6;
+  --nav-text: #1d2b55;
+  --nav-muted: #7a879f;
+  --rail-icon: #8a97b0;
+  --royal: #3a6fd8;
+  --deep-blue: #2a56b8;
+  --active-chat: #ffffff;
+
+  /* work area */
+  --bg: #ffffff;
+  --bg-subtle: #f7f9fd;
+  --surface: #ffffff;
+  --ink: #142769;
+  --text: #2a3654;
+  --muted: #6b7891;
+  --line: #e8edf5;
+  --accent: #3a6fd8;
+  --accent-text: #2a56b8;
+  --on-accent: #ffffff;
+  --tint: #eef3fd;
+  --focus: #3a6fd8;
+  --alert: #c2410c;
+  --gold: #d4a46a;
+  --gold-text: #7a5524;
+  --gold-tint: #fdf6ec;
+  --msg-human: #eaf1ff;
+  --msg-agent: #f6f8fc;
+  --msg-system: #f1f4f9;
+  --selection: #eef3fd;
+  --wash: radial-gradient(1200px 360px at 20% -120px, #eaf1ff 0%, rgba(234, 241, 255, 0) 70%);
+
+  --shadow-composer: 0 0 0 1px #e3e9f4, 0 6px 20px -8px rgba(20, 39, 105, 0.18), 0 2px 4px -2px rgba(20, 39, 105, 0.06);
+  --shadow-send: 0 6px 16px -4px rgba(58, 111, 216, 0.55);
+  --shadow-overlay: 0 18px 48px -12px rgba(20, 39, 105, 0.28), 0 4px 12px -4px rgba(20, 39, 105, 0.12);
+  --shadow-control: 0 0 0 1px #e3e9f4, 0 1px 2px rgba(20, 39, 105, 0.06);
+
+  /* the frosted menu bar panel */
+  --glass: rgba(255, 255, 255, 0.7);
+  --glass-strong: rgba(255, 255, 255, 0.88);
+  --glass-line: rgba(255, 255, 255, 0.7);
+  --glass-edge: rgba(20, 39, 105, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --rail-bg: #161c28;
+    --panel-bg: #1d2533;
+    --nav-line: #2a3446;
+    --nav-text: #e7edf5;
+    --nav-muted: #93a1ba;
+    --rail-icon: #8796b2;
+    --royal: #7fa6ff;
+    --deep-blue: #a9c3ff;
+    --active-chat: #232c3d;
+
+    --bg: #1a2130;
+    --bg-subtle: #1d2533;
+    --surface: #202938;
+    --ink: #f5f7fa;
+    --text: #e2e8f2;
+    --muted: #97a5bd;
+    --line: #2e394c;
+    --accent: #7fa6ff;
+    --accent-text: #a9c3ff;
+    --on-accent: #0f1a3d;
+    --tint: #243149;
+    --focus: #7fa6ff;
+    --wash: radial-gradient(1200px 360px at 20% -120px, rgba(127, 166, 255, 0.12) 0%, rgba(127, 166, 255, 0) 70%);
+    --alert: #ffc79f;
+    --gold: #d8b38a;
+    --gold-text: #f1d9bc;
+    --gold-tint: #2e2a26;
+    --msg-human: #293e5b;
+    --msg-agent: #222c3b;
+    --msg-system: #1c2531;
+    --selection: #293e5b;
+
+    --shadow-composer: inset 0 1px 0 #ffffff14, 0 0 0 1px #37465a, 0 12px 24px -12px #00000080;
+    --shadow-send: 0 8px 18px #00000066;
+    --shadow-overlay: 0 12px 36px #00000066;
+    --shadow-control: 0 0 0 1px #37465a;
+
+    --glass: rgba(24, 31, 44, 0.66);
+    --glass-strong: rgba(32, 41, 56, 0.86);
+    --glass-line: rgba(255, 255, 255, 0.12);
+    --glass-edge: rgba(0, 0, 0, 0.4);
+  }
+}
+
+@theme inline {
+  --font-sans: "Manrope Variable", "Manrope", -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+
+  --color-rail: var(--rail-bg);
+  --color-rail-panel: var(--panel-bg);
+  --color-nav-line: var(--nav-line);
+  --color-nav-text: var(--nav-text);
+  --color-nav-muted: var(--nav-muted);
+  --color-rail-icon: var(--rail-icon);
+  --color-royal: var(--royal);
+  --color-deep-blue: var(--deep-blue);
+
+  --color-bg: var(--bg);
+  --color-bg-subtle: var(--bg-subtle);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-accent-text: var(--accent-text);
+  --color-on-accent: var(--on-accent);
+  --color-tint: var(--tint);
+  --color-focus: var(--focus);
+  --color-alert: var(--alert);
+  --color-gold: var(--gold);
+  --color-gold-text: var(--gold-text);
+  --color-gold-tint: var(--gold-tint);
+  --color-msg-human: var(--msg-human);
+  --color-msg-agent: var(--msg-agent);
+  --color-msg-system: var(--msg-system);
+  --color-selection: var(--selection);
+  --color-glass: var(--glass);
+  --color-glass-strong: var(--glass-strong);
+  --color-glass-line: var(--glass-line);
+
+  --shadow-composer: var(--shadow-composer);
+  --shadow-send: var(--shadow-send);
+  --shadow-overlay: var(--shadow-overlay);
+  --shadow-control: var(--shadow-control);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    font-family: var(--font-sans);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    font-variant-numeric: tabular-nums;
+    margin: 0;
+  }
+  .dashboard-body {
+    background: var(--bg);
+  }
+  .wash {
+    background: var(--wash), var(--bg);
+  }
+  /* The panel window is transparent; macOS vibrancy shows through. */
+  .panel-body {
+    background: transparent;
+    overflow: hidden;
+  }
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  button {
+    cursor: default;
+  }
+}
+
+/* In a plain browser (development) there is no vibrancy behind the panel,
+   so blur a stand-in desktop instead. */
+.browser-preview.panel-body {
+  background: linear-gradient(120deg, #c9d6ec 0%, #e8eef8 40%, #b7c7e2 100%);
+}
+.browser-preview .glass {
+  backdrop-filter: blur(28px) saturate(1.6);
+  -webkit-backdrop-filter: blur(28px) saturate(1.6);
+  box-shadow: 0 0 0 0.5px var(--glass-edge), var(--shadow-overlay);
+}
+
+/* In the app, macOS draws the window shadow; a CSS shadow would be clipped. */
+.glass {
+  background: var(--glass);
+  border: 1px solid var(--glass-line);
+  box-shadow: 0 0 0 0.5px var(--glass-edge);
+}
+
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.panel-in {
+  animation: panel-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform-origin: top center;
+}
+
+@keyframes wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+.wave-bar {
+  animation: wave 900ms ease-in-out infinite;
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-in,
+  .wave-bar {
+    animation: none;
+  }
+}
