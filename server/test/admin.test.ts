@@ -13,6 +13,7 @@ import postgres from 'postgres';
 import {boot, type Instance} from '../src/boot.js';
 import {config} from '../src/config.js';
 import {connectionOptions} from '../src/db/index.js';
+import {migrate} from '../src/db/migrate.js';
 import {Catalog} from '../src/llm/catalog.js';
 import {decryptSecret, encryptSecret} from '../src/util/crypto.js';
 
@@ -68,6 +69,39 @@ describe('model keys in Settings', () => {
             config.instanceAdmins.length = 0;
         }
         await expectStatus(second.api.get('/admin/providers'), 403);
+    });
+
+    it('with INSTANCE_ADMINS set, only the people it lists run the server', async () => {
+        config.instanceAdmins.push('someone-else@example.com');
+        try {
+            assert.equal((await first.api.get('/users/me')).instanceAdmin, undefined, 'the first sign-up no longer counts');
+            await expectStatus(first.api.get('/admin/providers'), 403);
+        } finally {
+            config.instanceAdmins.length = 0;
+        }
+    });
+
+    it('doesn\'t let a workspace owner take over the server admin\'s account, or anyone else\'s', async () => {
+        // A stranger makes a workspace and invites the person who runs the server.
+        const [{id: strangerWs}] = await second.api.get('/workspaces');
+        const invite = await second.api.post(`/workspaces/${strangerWs}/invites`, {});
+        await first.api.post(`/invites/${invite.token}/accept`, {});
+        const members = await second.api.get(`/workspaces/${strangerWs}/members`);
+        assert.ok(members.users.every((u: {instanceAdmin?: boolean}) => u.instanceAdmin === undefined), 'not shown to other people');
+        const err = await expectStatus(second.api.post(`/workspaces/${strangerWs}/members/${first.session.user.id}/reset-link`), 403);
+        assert.match(err.body.message!, /runs the server/);
+
+        // Nor anyone who is also in another workspace.
+        const third = await signup(s.base, {name: 'Third', workspaceName: 'Third\'s own'});
+        const invite2 = await second.api.post(`/workspaces/${strangerWs}/invites`, {});
+        await third.api.post(`/invites/${invite2.token}/accept`, {});
+        const err2 = await expectStatus(second.api.post(`/workspaces/${strangerWs}/members/${third.session.user.id}/reset-link`), 403);
+        assert.match(err2.body.message!, /other workspaces/);
+    });
+
+    it('ignores provider names that aren\'t providers', async () => {
+        await expectStatus(first.api.put('/admin/providers/__proto__', {apiKey: 'sk-long-enough-key'}), 404);
+        await expectStatus(first.api.put('/admin/providers/constructor', {apiKey: 'sk-long-enough-key'}), 404);
     });
 
     it('starts in demo mode and lists OpenRouter first', async () => {
@@ -164,6 +198,7 @@ describe('model keys in Settings', () => {
         flipped[0] ^= 1;
         assert.equal(decryptSecret([v, iv, tag, flipped.toString('base64')].join(':')), null);
         assert.equal(decryptSecret('garbage'), null);
+        assert.equal(decryptSecret([v, iv, Buffer.from(tag, 'base64').subarray(0, 4).toString('base64'), data].join(':')), null, 'a short tag is refused');
 
         await s.instance.ctx.sql`update provider_keys set secret = ${'v1:AAAA:AAAA:AAAA'} where provider_id = 'openrouter'`;
         await s.instance.ctx.keys.load();
@@ -178,6 +213,15 @@ describe('model keys in Settings', () => {
         try {
             const open = await sql`select tablename from pg_tables where schemaname = 'public' and not rowsecurity`;
             assert.deepEqual(open.map((r) => r.tablename), []);
+
+            // Another app's tables in the same database are left alone, whoever owns them.
+            await sql.unsafe(`do $$ begin if not exists (select 1 from pg_roles where rolname = 'captain_test_other') then create role captain_test_other; end if; end $$`);
+            await sql.unsafe('create table public.someone_elses (id int); alter table public.someone_elses owner to captain_test_other');
+            await sql.unsafe('create table public.another_app (id int)');
+            await migrate(s.instance.ctx.sql);
+            const others = await sql`select tablename, rowsecurity from pg_tables where schemaname = 'public' and tablename in ('someone_elses', 'another_app')`;
+            assert.deepEqual(others.map((r) => r.rowsecurity), [false, false]);
+            await sql.unsafe('drop table public.someone_elses; drop table public.another_app');
         } finally {
             await sql.end();
         }
@@ -195,5 +239,30 @@ describe('database addresses', () => {
         assert.match(tx.warning!, /5432/);
         assert.equal(connectionOptions('postgres://postgres@127.0.0.1:5432/captain').ssl, undefined);
         assert.equal(connectionOptions(`${pooler}?sslmode=verify-full`).ssl, undefined, 'an explicit sslmode wins');
+    });
+});
+
+describe('an invite-only server', () => {
+    let s: TestServer;
+    const was = config.openSignup;
+    before(async () => {
+        config.openSignup = false;
+        s = await startServer();
+    });
+    after(async () => {
+        config.openSignup = was;
+        await s.stop();
+    });
+
+    it('lets the first person sign up to set it up, then needs invites', async () => {
+        assert.equal((await client(s.base).get('/config')).openSignup, true);
+        const owner = await signup(s.base, {name: 'Setup', workspaceName: 'Home'});
+        assert.equal(owner.session.user.instanceAdmin, true);
+        assert.equal((await client(s.base).get('/config')).openSignup, false);
+        await expectStatus(signup(s.base, {name: 'Stranger', workspaceName: 'Theirs'}), 403);
+        const [{id}] = await owner.api.get('/workspaces');
+        const invite = await owner.api.post(`/workspaces/${id}/invites`, {});
+        const guest = await signup(s.base, {name: 'Invited', invite: invite.token});
+        assert.equal(guest.session.user.instanceAdmin, undefined);
     });
 });

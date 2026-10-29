@@ -25,7 +25,7 @@ services:
       - key: CORS_ORIGINS
         value: tauri://localhost,http://tauri.localhost
       - key: OPEN_SIGNUP
-        value: "true"
+        value: "false" # invite-only: model keys are shared, so strangers would spend your credit. The first person can always sign up.
       - key: TRUST_PROXY
         value: "1" # Render's proxy sets X-Forwarded-For
       - key: OPENROUTER_API_KEY

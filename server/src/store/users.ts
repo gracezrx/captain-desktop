@@ -19,10 +19,17 @@ export type UserRow = {
     lastActiveAt: number | null;
 };
 
-// People who run this server: the first person to sign up, plus anyone listed
-// in INSTANCE_ADMINS. They manage model keys for every workspace.
+// People who run this server and manage model keys for every workspace. When
+// INSTANCE_ADMINS is set, exactly the people it lists; otherwise the first
+// person to sign up (the users.instance_admin column).
 export function isInstanceAdmin(r: Pick<UserRow, 'instanceAdmin' | 'email' | 'isBot'>): boolean {
-    return !r.isBot && (r.instanceAdmin || (!!r.email && config.instanceAdmins.includes(r.email.toLowerCase())));
+    if (r.isBot) {
+        return false;
+    }
+    if (config.instanceAdmins.length) {
+        return !!r.email && config.instanceAdmins.includes(r.email.toLowerCase());
+    }
+    return r.instanceAdmin;
 }
 
 // The first person to sign up on a new server runs it. A lock makes two
@@ -37,7 +44,9 @@ export async function claimInstanceAdmin(sql: Sql, userId: string): Promise<bool
     }) as Promise<boolean>;
 }
 
-export function toUser(r: UserRow, opts: {includeEmail?: boolean} = {}): User {
+// includeEmail: for yourself and workspace admins. self: your own profile,
+// which also says whether you run the server.
+export function toUser(r: UserRow, opts: {includeEmail?: boolean; self?: boolean} = {}): User {
     return {
         id: r.id,
         username: r.username,
@@ -47,7 +56,7 @@ export function toUser(r: UserRow, opts: {includeEmail?: boolean} = {}): User {
         agentId: r.agentId,
         portrait: r.portrait,
         createdAt: r.createdAt,
-        ...(opts.includeEmail && isInstanceAdmin(r) ? {instanceAdmin: true} : {}),
+        ...(opts.self && isInstanceAdmin(r) ? {instanceAdmin: true} : {}),
     };
 }
 

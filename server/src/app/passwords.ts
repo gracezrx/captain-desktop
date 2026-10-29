@@ -11,7 +11,7 @@ import {tx, type Db} from '../db/index.js';
 import type {Session} from '../shared/types.js';
 import {audit} from '../store/audit.js';
 import {deleteUserSessions} from '../store/sessions.js';
-import {getUser, getUserByLogin, updateUser, type UserRow} from '../store/users.js';
+import {getUser, getUserByLogin, isInstanceAdmin, updateUser, type UserRow} from '../store/users.js';
 import {getMemberRole} from '../store/workspaces.js';
 import {hashPassword, newToken, sha256} from '../util/crypto.js';
 import {badRequest, forbidden, notFound} from '../util/errors.js';
@@ -58,7 +58,10 @@ export async function requestByEmail(ctx: Ctx, emailInput: unknown, meta: {ip?: 
     }).catch((err) => log.error({err}, 'reset email failed'));
 }
 
-// A workspace admin makes a link for a member (the member's role must be lower, unless an owner asks).
+// A workspace admin makes a link for a member (the member's role must be lower,
+// unless an owner asks). An account can belong to several workspaces, so only
+// accounts that belong to this workspace alone qualify, and never the people
+// who run the server. Everyone else uses Forgot password.
 export async function adminResetLink(ctx: Ctx, actor: UserRow, workspaceId: string, userId: string): Promise<{url: string; expiresAt: number}> {
     const actorRole = await requireWorkspaceRole(ctx.sql, workspaceId, actor.id, 'admin');
     const targetRole = await getMemberRole(ctx.sql, workspaceId, userId);
@@ -71,6 +74,13 @@ export async function adminResetLink(ctx: Ctx, actor: UserRow, workspaceId: stri
     }
     if (atLeast(targetRole, 'admin') && actorRole !== 'owner') {
         throw forbidden('Only an owner can reset an admin\'s or owner\'s password.');
+    }
+    if (isInstanceAdmin(target) && !isInstanceAdmin(actor)) {
+        throw forbidden('This person runs the server, so they reset their own password with "Forgot password?".');
+    }
+    const [{elsewhere}] = await ctx.sql`select count(*)::int as elsewhere from workspace_members where user_id = ${userId} and workspace_id <> ${workspaceId}`;
+    if (Number(elsewhere) > 0 && !isInstanceAdmin(actor)) {
+        throw forbidden('This person is also in other workspaces, so only they can reset their password, with "Forgot password?".');
     }
     const token = await createReset(ctx.sql, userId, actor.id, ADMIN_LINK_MS);
     audit(ctx.sql, {workspaceId, userId: actor.id, action: 'password_reset_link_created', target: userId});

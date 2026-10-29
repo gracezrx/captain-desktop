@@ -440,6 +440,11 @@ function ModelKeys({demo, onChanged}: {demo: boolean; onChanged: () => void}) {
     const [providers, setProviders] = useState<ProviderKeyInfo[] | null>(null);
     const [more, setMore] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Kept here, not in each row: a row moves between lists once its key is saved.
+    const [results, setResults] = useState<Record<string, ProviderCheck | null>>({});
+    const row = (p: ProviderKeyInfo, open = false) => (
+        <ProviderRow key={p.id} p={p} open={open} onChanged={changed} result={results[p.id] ?? null} onResult={(r) => setResults((x) => ({...x, [p.id]: r}))}/>
+    );
     const load = () => api.providers().then(setProviders).catch((e) => setError(errorMessage(e)));
     useEffect(() => {
         void load();
@@ -465,31 +470,33 @@ function ModelKeys({demo, onChanged}: {demo: boolean; onChanged: () => void}) {
                 {demo ? 'Agents are giving sample answers. ' : ''}One OpenRouter key turns on every model below; the router picks among them for each request. Keys are stored encrypted and never shown again.
             </p>
             <div className='space-y-2'>
-                {main && <ProviderRow p={main} open onChanged={changed}/>}
-                {inUse.map((p) => <ProviderRow key={p.id} p={p} onChanged={changed}/>)}
+                {main && row(main, true)}
+                {inUse.map((p) => row(p))}
             </div>
             {others.length > 0 && (
                 <div className='mt-2'>
                     <button type='button' onClick={() => setMore(!more)} className='inline-flex items-center gap-1 text-[12.5px] font-semibold text-muted hover:text-ink'>
                         <ChevronDown size={14} className={more ? 'rotate-180' : ''}/> {more ? 'Fewer providers' : `Other providers (${others.length}): use their keys directly, tried before OpenRouter`}
                     </button>
-                    {more && <div className='mt-2 space-y-2'>{others.map((p) => <ProviderRow key={p.id} p={p} onChanged={changed}/>)}</div>}
+                    {more && <div className='mt-2 space-y-2'>{others.map((p) => row(p))}</div>}
                 </div>
             )}
         </section>
     );
 }
 
-function ProviderRow({p, open = false, onChanged}: {p: ProviderKeyInfo; open?: boolean; onChanged: () => void}) {
+type RowProps = {p: ProviderKeyInfo; open?: boolean; onChanged: () => void; result: ProviderCheck | null; onResult: (r: ProviderCheck | null) => void};
+
+function ProviderRow({p, open = false, onChanged, result, onResult: setResult}: RowProps) {
     const [editing, setEditing] = useState(open && !p.source);
     const [key, setKey] = useState('');
     const [baseUrl, setBaseUrl] = useState(p.needsBaseUrl ? p.baseUrl ?? '' : '');
     const [busy, setBusy] = useState<'save' | 'check' | 'remove' | null>(null);
-    const [result, setResult] = useState<ProviderCheck | null>(null);
     const [error, setError] = useState<string | null>(null);
 
     const check = async () => {
         setBusy('check');
+        setError(null);
         setResult(null);
         try {
             setResult(await api.checkProvider(p.id));

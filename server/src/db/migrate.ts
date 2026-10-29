@@ -34,13 +34,30 @@ export function listMigrations(dir = MIGRATIONS_DIR): Migration[] {
 // policies closes that door. This server connects as the tables' owner, which
 // row-level security doesn't apply to, so nothing changes for it. Runs after
 // every migration so new tables are covered too; harmless on plain Postgres.
-async function lockPublicTables(db: postgres.ReservedSql<Record<string, unknown>>): Promise<void> {
-    await db.unsafe(`
-        do $$ declare t record; begin
-            for t in select tablename from pg_tables where schemaname = 'public' and not rowsecurity loop
-                execute format('alter table public.%I enable row level security', t.tablename);
-            end loop;
-        end $$`);
+// Only this server's own tables (the ones its migrations create): another
+// app's tables in a shared database are left alone.
+export function ownTables(migrations: Migration[]): string[] {
+    const names = new Set(['schema_migrations']);
+    for (const m of migrations) {
+        for (const match of m.sql.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z_][a-z0-9_]*)/gi)) {
+            names.add(match[1].toLowerCase());
+        }
+    }
+    return [...names];
+}
+
+async function lockOwnTables(db: postgres.ReservedSql<Record<string, unknown>>, tables: string[]): Promise<void> {
+    const open = await db`
+        select tablename from pg_tables
+        where schemaname = 'public' and not rowsecurity and tableowner = current_user and tablename = any(${tables})`;
+    for (const r of open) {
+        const name = String(r.tablename);
+        try {
+            await db.unsafe(`alter table public."${name.replace(/"/g, '""')}" enable row level security`);
+        } catch (err) {
+            log.warn({err, table: name}, 'could not turn on row-level security');
+        }
+    }
 }
 
 export async function migrate(sql: Sql, dir = MIGRATIONS_DIR): Promise<number> {
@@ -76,7 +93,7 @@ export async function migrate(sql: Sql, dir = MIGRATIONS_DIR): Promise<number> {
             log.info({migration: m.name}, 'applied migration');
             count++;
         }
-        await lockPublicTables(reserved);
+        await lockOwnTables(reserved, ownTables(listMigrations(dir)));
         return count;
     } finally {
         await reserved`select pg_advisory_unlock(${LOCK_KEY})`.catch(() => undefined);

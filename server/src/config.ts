@@ -40,17 +40,21 @@ if (production && secret.length < 32) {
 function devSecret(): string {
     const file = path.join(SERVER_DIR, 'data', '.app-secret');
     try {
-        return fs.readFileSync(file, 'utf8').trim();
-    } catch {
-        const value = randomBytes(32).toString('hex');
-        try {
-            fs.mkdirSync(path.dirname(file), {recursive: true});
-            fs.writeFileSync(file, value, {mode: 0o600});
-        } catch {
-            // read-only disk: a fresh secret each start
+        const saved = fs.readFileSync(file, 'utf8').trim();
+        if (saved.length >= 32) {
+            return saved;
         }
-        return value;
+    } catch {
+        // not made yet
     }
+    const value = randomBytes(32).toString('hex');
+    try {
+        fs.mkdirSync(path.dirname(file), {recursive: true});
+        fs.writeFileSync(file, value, {mode: 0o600});
+    } catch {
+        // read-only disk: a fresh secret each start
+    }
+    return value;
 }
 
 export const config = {

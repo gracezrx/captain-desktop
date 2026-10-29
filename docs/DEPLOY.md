@@ -70,7 +70,8 @@ Connection budget: each instance opens up to `DATABASE_POOL_SIZE` (default 10) c
    - optionally `TAVILY_API_KEY` for web search
    - optionally `SMTP_URL` and `MAIL_FROM` for email
 3. Deploy. Migrations run when the service starts, and the health check is `/readyz`.
-4. Open the site, sign up with the email you put in `INSTANCE_ADMINS`, and paste your model key (below).
+4. Right away, open the site, sign up with the email you put in `INSTANCE_ADMINS`, and paste your model key (below).
+5. Invite testers from Settings → People. The Blueprint sets `OPEN_SIGNUP=false`: model keys are shared by every workspace, so open sign-up would let strangers spend your credit. The first person can always sign up. Set it to `true` when you want anyone to join.
 
 Render generates `APP_SECRET` once and keeps it. Don't change it later: it encrypts saved model keys.
 
@@ -80,7 +81,8 @@ Any host that runs a Docker image and gives it Postgres works the same way: Fly.
 
 The people who run the server set model keys in the app, under **Settings → Models & spend → Model keys**. Everyone else sees only which models are on.
 
-- **Who runs the server:** the people listed in `INSTANCE_ADMINS`. If it's empty, the first person to sign up. On a server open to sign-ups, set `INSTANCE_ADMINS` before you share the link.
+- **Who runs the server:** exactly the people listed in `INSTANCE_ADMINS`; if it's empty, the first person to sign up. Emails aren't verified yet, so sign up with a listed address before anyone else can.
+- **Their accounts are protected:** workspace owners can't make password-reset links for them, or for anyone who is also in another workspace. Those people use "Forgot password?".
 - **Which key:** one [OpenRouter key](https://openrouter.ai/keys) turns on every model in the catalog. Vendor keys (Anthropic, OpenAI, Google, DeepSeek, Moonshot, …) are listed under "Other providers". They're tried before OpenRouter for their own models.
 - **Saving tries the key.** The server sends a tiny request to the provider's cheapest model. A key the provider rejects isn't saved; other problems, such as no credit, are shown and the key is kept. **Check** repeats the test later.
 - **Storage:** keys are encrypted with `APP_SECRET` (AES-256-GCM) and never sent back to the app, only their last four characters. Every instance picks up a change within a second.
@@ -153,7 +155,8 @@ For a universal build that runs on Intel and Apple Silicon: `npm run tauri build
 ### Before inviting people you don't know
 
 - [ ] `APP_SECRET` is set and the site is on HTTPS.
-- [ ] `INSTANCE_ADMINS` names you, so a stranger who signs up first can't set model keys.
+- [ ] `INSTANCE_ADMINS` names you, and you've signed up with that address.
+- [ ] `OPEN_SIGNUP=false` until you're ready for strangers (and their model use) on your keys.
 - [ ] `TRUST_PROXY` matches your setup (`1` behind one load balancer), so sign-in limits apply per real client.
 - [ ] Decide on `OPEN_SIGNUP`, and set a monthly budget per workspace (Settings → Models & spend).
 - [ ] Set `SMTP_URL` so "Forgot password?" can email links; without it, admins make reset links in Settings → People.

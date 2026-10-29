@@ -24,7 +24,8 @@ export function connectionOptions(url: string): {ssl?: 'require'; prepare?: bool
     const out: {ssl?: 'require'; prepare?: boolean; warning?: string} = {};
     const mode = (process.env.DATABASE_SSL ?? '').trim().toLowerCase();
     const hosted = /(^|\.)(supabase\.(co|com)|neon\.tech|render\.com)$/.test(u.hostname);
-    if (mode === 'require' || (!mode && hosted && !u.searchParams.has('sslmode'))) {
+    const explicit = u.searchParams.has('sslmode') || u.searchParams.has('sslrootcert') || u.searchParams.has('ssl');
+    if (mode === 'require' || (!mode && hosted && !explicit)) {
         out.ssl = 'require';
     }
     if (u.port === '6543') {

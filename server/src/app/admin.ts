@@ -21,7 +21,8 @@ export function requireInstanceAdmin(user: UserRow): void {
 }
 
 function provider(ctx: Ctx, providerId: string) {
-    const p = ctx.router.catalog.providers[providerId];
+    const {providers} = ctx.router.catalog;
+    const p = Object.hasOwn(providers, providerId) ? providers[providerId] : undefined;
     if (!p) {
         throw notFound('That provider');
     }

@@ -8,7 +8,7 @@ import {requestByEmail, useResetLink} from '../app/passwords.js';
 import {acceptInvite, createWorkspaceFor, previewInvite} from '../app/workspaces.js';
 import {mailEnabled} from '../util/mail.js';
 import {config} from '../config.js';
-import {tx} from '../db/index.js';
+import {type Sql, tx} from '../db/index.js';
 import {getInviteByHash, inviteUsable} from '../store/workspaces.js';
 import {claimInstanceAdmin, getUsers, toUser, updateUser} from '../store/users.js';
 import {sha256} from '../util/crypto.js';
@@ -24,12 +24,17 @@ const signupInput = z.object({
     workspaceName: z.string().max(60).optional(),
 });
 
+async function noPeopleYet(sql: Sql): Promise<boolean> {
+    const [row] = await sql`select exists (select 1 from users where not is_bot) as any`;
+    return !row.any;
+}
+
 export function authRoutes(app: FastifyInstance, api: Api): void {
     const {ctx} = api;
     const meta = (req: {headers: Record<string, unknown>; ip: string}) => ({userAgent: String(req.headers['user-agent'] ?? ''), ip: req.ip});
 
     app.get('/config', {config: {public: true}}, async () => ({
-        openSignup: config.openSignup,
+        openSignup: config.openSignup || await noPeopleYet(ctx.sql),
         emailEnabled: mailEnabled(),
         demoMode: ctx.router.demoMode,
         version: api.version,
@@ -37,7 +42,8 @@ export function authRoutes(app: FastifyInstance, api: Api): void {
 
     app.post('/auth/signup', {config: {public: true, auth: true}}, async (req) => {
         const body = signupInput.parse(req.body);
-        if (!config.openSignup) {
+        // Invite-only servers still let the very first person in, to set it up.
+        if (!config.openSignup && !(await noPeopleYet(ctx.sql))) {
             const invite = body.invite ? await getInviteByHash(ctx.sql, sha256(body.invite)) : null;
             if (!invite || !inviteUsable(invite)) {
                 throw forbidden('This server is invite-only. Ask for an invite link.');

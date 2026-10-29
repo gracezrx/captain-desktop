@@ -23,7 +23,7 @@ const sessionMs = () => config.sessionDays * 86_400_000;
 export async function issueSession(db: Db, user: UserRow, meta: {userAgent?: string; ip?: string}): Promise<Session> {
     const token = newToken();
     await createSession(db, {userId: user.id, tokenHash: sha256(token), expiresAt: now() + sessionMs(), userAgent: meta.userAgent?.slice(0, 300), ip: meta.ip});
-    return {token, user: toUser(user, {includeEmail: true})};
+    return {token, user: toUser(user, {includeEmail: true, self: true})};
 }
 
 export async function signupUser(db: Db, input: {email: string; password: string; name: string}): Promise<UserRow> {
@@ -105,5 +105,5 @@ export async function changePassword(db: Db, user: UserRow, sessionId: string, c
 }
 
 export function me(user: UserRow): User {
-    return toUser(user, {includeEmail: true});
+    return toUser(user, {includeEmail: true, self: true});
 }
