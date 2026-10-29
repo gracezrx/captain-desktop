@@ -275,9 +275,40 @@ export function parseServerSettings(text: string): {databaseUrl: string; appSecr
     return {databaseUrl: t, appSecret: null};
 }
 
-export async function localServerSetup(text: string): Promise<void> {
+// The address Supabase shows (Connect → Session pooler) has [YOUR-PASSWORD]
+// in it: put the password there (or after the user name, if it has none).
+export function withPassword(address: string, password: string): string {
+    const a = address.trim();
+    if (!password) {
+        return a;
+    }
+    const pw = encodeURIComponent(password);
+    if (a.includes('[YOUR-PASSWORD]')) {
+        return a.replace('[YOUR-PASSWORD]', () => pw);
+    }
+    const bare = /^(postgres(?:ql)?:\/\/)([^:@/]+)@/.exec(a);
+    return bare ? `${bare[1]}${bare[2]}:${pw}@${a.slice(bare[0].length)}` : a;
+}
+
+export async function localServerSetup(text: string, password = ''): Promise<void> {
     const {databaseUrl, appSecret} = parseServerSettings(text);
-    await invoke('local_server_setup', {databaseUrl, appSecret});
+    await invoke('local_server_setup', {databaseUrl: withPassword(databaseUrl, password), appSecret});
+}
+
+// The settings of a Captain server you ran yourself before (its server/.env
+// in a captain-desktop folder). Only which project it is comes back; the
+// address and secret stay in the app.
+export type FoundServerSettings = {path: string; project: string; keepsKeys: boolean};
+
+export async function localServerFound(): Promise<FoundServerSettings[]> {
+    if (!isTauri) {
+        return [];
+    }
+    return invoke<FoundServerSettings[]>('local_server_found').catch(() => []);
+}
+
+export async function localServerUseFound(path: string): Promise<void> {
+    await invoke('local_server_use_found', {path});
 }
 
 export async function localServerRestart(): Promise<void> {

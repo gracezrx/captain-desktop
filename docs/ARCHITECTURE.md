@@ -4,7 +4,7 @@ Captain is one server and one app.
 
 - **The server** (`server/`) is a TypeScript service on Postgres. It handles accounts, workspaces, chat, real-time updates, model routing and multi-agent orchestration. It runs hosted, or inside the Mac app.
 - **The app** (`desktop/`) is React, and runs in three places:
-  - **The Mac app (Tauri).** It adds the menu bar panel, the global shortcut, screen snapshots, banners and the Keychain. It can also start the server on the Mac: the code ships in the app's Resources and runs with the Mac's Node.js on 127.0.0.1:8787 (`src-tauri/src/lib.rs`, "built-in server").
+  - **The Mac app (Tauri).** It adds the menu bar panel, the global shortcut, screen snapshots, banners and the saved session. It can also start the server on the Mac: the code ships in the app's Resources and runs with the Mac's Node.js on 127.0.0.1:8787 (`src-tauri/src/lib.rs`, "built-in server").
   - **The web app** the server hosts at `/`.
   - **The Chrome extension** (`src/extension/`). It shows the menu bar panel's view in the toolbar popup and the side panel, and adds page tools, a right-click menu and a badge from a background worker.
 
@@ -166,7 +166,7 @@ Agent messages carry `props.model` (the model id, provider, tier and cost) and, 
   - the frosted panel under the icon
   - `screencapture` snapshots
   - notification banners that open the right thread
-  - the Keychain, which stores the session
+  - the session and the built-in server's database address, in a file only you can read (`secrets.json` in the app's settings folder)
 
 ## Scaling and availability
 

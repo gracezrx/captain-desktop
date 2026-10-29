@@ -2,7 +2,7 @@
 //! the frosted panel that drops down from the icon, the floating talk button,
 //! voice (Apple's speech recognition and voices, through the captain-voice
 //! helper), screen snapshots, notifications that open the right thread, and
-//! the Keychain.
+//! the private settings file (the session and the built-in server's database).
 //!
 //! Everything else (chats, messages, decisions) lives in the web view and
 //! talks to the Captain server directly (REST and one WebSocket). That server
@@ -22,7 +22,6 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
-const KEYCHAIN_SERVICE: &str = "ai.captainspace.desktop";
 const TRAY_ID: &str = "captain";
 
 /// Which view the panel should open on. Matches `PanelTarget` in src/lib/native.ts.
@@ -283,38 +282,95 @@ fn capture_png(_region: bool) -> Result<Vec<u8>, String> {
     Err("Screen snapshots are only available on macOS for now.".into())
 }
 
-// ------------------------------------------------------------ keychain
+// ------------------------------------------------------------ secrets
+//
+// The session and the built-in server's settings, in a file in the app's
+// config folder that only you can read (0600). They used to be in the
+// Keychain, but these builds are signed ad hoc, which gives the app a new
+// identity with every update: macOS then hides its Keychain items from it (or
+// asks for your password again and again). With a Developer ID, the Keychain
+// would work across updates.
 
-#[tauri::command]
-fn secret_get(key: String) -> Result<Option<String>, String> {
-    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, &key).map_err(|e| e.to_string())?;
-    match entry.get_password() {
-        Ok(v) => Ok(Some(v)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(e.to_string()),
+fn secrets_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("secrets.json"))
+}
+
+fn secrets_read(app: &AppHandle) -> serde_json::Map<String, serde_json::Value> {
+    secrets_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn secrets_write(app: &AppHandle, all: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    let path = secrets_path(app).ok_or("No place to keep settings.")?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
+    let text = serde_json::to_string(all).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+        }
+        file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+fn secret_value(app: &AppHandle, key: &str) -> Option<String> {
+    secrets_read(app).get(key).and_then(|v| v.as_str()).map(str::to_string).filter(|v| !v.is_empty())
+}
+
+// One change at a time: each one reads the file, changes a key and writes it back.
+static SECRETS_LOCK: Mutex<()> = Mutex::new(());
+
+fn secret_store(app: &AppHandle, key: &str, value: Option<&str>) -> Result<(), String> {
+    let _held = SECRETS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = secrets_read(app);
+    match value {
+        Some(v) => {
+            all.insert(key.to_string(), serde_json::Value::String(v.to_string()));
+        }
+        None => {
+            all.remove(key);
+        }
+    }
+    secrets_write(app, &all)
 }
 
 #[tauri::command]
-fn secret_set(key: String, value: String) -> Result<(), String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, &key)
-        .and_then(|e| e.set_password(&value))
-        .map_err(|e| e.to_string())
+fn secret_get(app: AppHandle, key: String) -> Result<Option<String>, String> {
+    Ok(secret_value(&app, &key))
 }
 
 #[tauri::command]
-fn secret_delete(key: String) -> Result<(), String> {
-    match keyring::Entry::new(KEYCHAIN_SERVICE, &key).and_then(|e| e.delete_credential()) {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+fn secret_set(app: AppHandle, key: String, value: String) -> Result<(), String> {
+    secret_store(&app, &key, Some(&value))
+}
+
+#[tauri::command]
+fn secret_delete(app: AppHandle, key: String) -> Result<(), String> {
+    secret_store(&app, &key, None)
 }
 
 // ------------------------------------------------------------ built-in server
 //
 // The app carries the Captain server's code (Resources/server) and runs it
 // with the Mac's Node.js, so the person never opens a terminal. Its database
-// address and secret live in the Keychain. It listens on 127.0.0.1 only.
+// address and secret live in the private settings file (see "secrets"). It
+// listens on 127.0.0.1 only.
 
 const LOCAL_PORT: u16 = 8787;
 const KEY_DATABASE_URL: &str = "local-server.database-url";
@@ -340,14 +396,6 @@ struct LocalServerStatus {
 
 fn local_url() -> String {
     format!("http://127.0.0.1:{LOCAL_PORT}")
-}
-
-fn keychain_get(key: &str) -> Option<String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, key).ok()?.get_password().ok().filter(|v| !v.is_empty())
-}
-
-fn keychain_set(key: &str, value: &str) -> Result<(), String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, key).and_then(|e| e.set_password(value)).map_err(|e| e.to_string())
 }
 
 fn random_hex(bytes: usize) -> Result<String, String> {
@@ -458,12 +506,12 @@ fn start_local(app: &AppHandle) -> Result<(), String> {
         // A server from an earlier run (or Start Captain) is already answering there.
         return Ok(());
     }
-    let database_url = keychain_get(KEY_DATABASE_URL).ok_or("Add your database address first.")?;
-    let app_secret = match keychain_get(KEY_APP_SECRET) {
+    let database_url = secret_value(app, KEY_DATABASE_URL).ok_or("Add your database address first.")?;
+    let app_secret = match secret_value(app, KEY_APP_SECRET) {
         Some(v) => v,
         None => {
             let v = random_hex(32)?;
-            keychain_set(KEY_APP_SECRET, &v)?;
+            secret_store(app, KEY_APP_SECRET, Some(&v))?;
             v
         }
     };
@@ -544,7 +592,7 @@ fn local_server_status(app: AppHandle) -> LocalServerStatus {
     if error.is_none() && !running && !starting && log.is_some() {
         error = Some("The server stopped.".into());
     }
-    LocalServerStatus { configured: keychain_get(KEY_DATABASE_URL).is_some(), running, starting, url: local_url(), error, log }
+    LocalServerStatus { configured: secret_value(&app, KEY_DATABASE_URL).is_some(), running, starting, url: local_url(), error, log }
 }
 
 /// Save the database address (and, from a pasted .env, its APP_SECRET) and start.
@@ -557,13 +605,91 @@ fn local_server_setup(app: AppHandle, database_url: String, app_secret: Option<S
     if url.contains("[YOUR-PASSWORD]") {
         return Err("Put your database password in place of [YOUR-PASSWORD] first.".into());
     }
-    keychain_set(KEY_DATABASE_URL, url)?;
+    secret_store(&app, KEY_DATABASE_URL, Some(url))?;
     if let Some(secret) = app_secret.map(|s| s.trim().to_string()).filter(|s| s.len() >= 32) {
-        keychain_set(KEY_APP_SECRET, &secret)?;
+        secret_store(&app, KEY_APP_SECRET, Some(&secret))?;
     }
     stop_local(&app);
     start_local_in_background(&app);
     Ok(())
+}
+
+// ------------------------------------------------------------ settings from a server you already ran
+//
+// If you ran the Captain server yourself before (its .env in a captain-desktop
+// folder), the app can use the same Supabase database and APP_SECRET (so model
+// keys saved there still work) with one click. Only the project's name goes to
+// the page; the address and secret stay here.
+
+fn env_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let Ok(home) = app.path().home_dir() else {
+        return vec![];
+    };
+    ["captain-desktop", "Documents/captain-desktop", "Developer/captain-desktop", "Projects/captain-desktop", "code/captain-desktop", "Documents/GitHub/captain-desktop", "GitHub/captain-desktop"]
+        .iter()
+        .map(|dir| home.join(dir).join("server").join(".env"))
+        .collect()
+}
+
+/// DATABASE_URL and APP_SECRET from a .env's text.
+fn parse_env(text: &str) -> (Option<String>, Option<String>) {
+    let value = |name: &str| {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .find_map(|l| l.strip_prefix(name)?.trim_start().strip_prefix('=').map(str::trim))
+            .map(|v| v.trim_matches('"').trim_matches('\'').to_string())
+            .filter(|v| !v.is_empty())
+    };
+    (value("DATABASE_URL"), value("APP_SECRET"))
+}
+
+/// The Supabase project in a database address, for showing which one.
+fn project_label(url: &str) -> String {
+    let user = url.split("://").nth(1).and_then(|r| r.split(':').next()).unwrap_or("");
+    if let Some(project) = user.strip_prefix("postgres.") {
+        return project.to_string();
+    }
+    let host = url.rsplit('@').next().and_then(|h| h.split([':', '/']).next()).unwrap_or("");
+    host.strip_prefix("db.").and_then(|h| h.strip_suffix(".supabase.co")).unwrap_or(host).to_string()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FoundSettings {
+    path: String,  // where it is, for showing ("~/Documents/captain-desktop/server/.env")
+    project: String,
+    keeps_keys: bool, // has an APP_SECRET, so model keys saved by that server still work
+}
+
+#[tauri::command]
+fn local_server_found(app: AppHandle) -> Vec<FoundSettings> {
+    let home = app.path().home_dir().ok();
+    env_candidates(&app)
+        .into_iter()
+        .filter_map(|p| {
+            let text = std::fs::read_to_string(&p).ok()?;
+            let (url, secret) = parse_env(&text);
+            let url = url.filter(|u| (u.starts_with("postgres://") || u.starts_with("postgresql://")) && !u.contains("[YOUR-PASSWORD]"))?;
+            let shown = match &home {
+                Some(h) => p.strip_prefix(h).map(|r| format!("~/{}", r.display())).unwrap_or_else(|_| p.display().to_string()),
+                None => p.display().to_string(),
+            };
+            Some(FoundSettings { path: shown, project: project_label(&url), keeps_keys: secret.map(|s| s.len() >= 32).unwrap_or(false) })
+        })
+        .collect()
+}
+
+/// Use the database (and APP_SECRET) from one of the places local_server_found looked.
+#[tauri::command]
+fn local_server_use_found(app: AppHandle, path: String) -> Result<(), String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let wanted = path.strip_prefix("~/").map(|r| home.join(r)).unwrap_or_else(|| PathBuf::from(&path));
+    let file = env_candidates(&app).into_iter().find(|p| *p == wanted).ok_or("Captain only reads the server settings it found.")?;
+    let text = std::fs::read_to_string(&file).map_err(|e| format!("Couldn't read {path}: {e}"))?;
+    let (url, secret) = parse_env(&text);
+    let url = url.ok_or("That file has no DATABASE_URL.")?;
+    local_server_setup(app, url, secret)
 }
 
 #[tauri::command]
@@ -586,10 +712,7 @@ fn local_server_stop(app: AppHandle) {
 #[tauri::command]
 fn local_server_forget(app: AppHandle) -> Result<(), String> {
     stop_local(&app);
-    match keyring::Entry::new(KEYCHAIN_SERVICE, KEY_DATABASE_URL).and_then(|e| e.delete_credential()) {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    secret_store(&app, KEY_DATABASE_URL, None)
 }
 
 // ------------------------------------------------------------ settings
@@ -1144,6 +1267,8 @@ pub fn run() {
             local_server_restart,
             local_server_stop,
             local_server_forget,
+            local_server_found,
+            local_server_use_found,
             shortcuts_get,
             shortcut_set,
             chrome_extension_reveal,
@@ -1165,7 +1290,7 @@ pub fn run() {
             let handle = app.handle().clone();
 
             // Start the built-in server if it's been set up.
-            if keychain_get(KEY_DATABASE_URL).is_some() {
+            if secret_value(&handle, KEY_DATABASE_URL).is_some() {
                 start_local_in_background(&handle);
             }
 
@@ -1325,6 +1450,17 @@ mod tests {
         let s = from(r#"{"panelShortcut":"Command+Shift+Space","talkShortcut":"Control+Shift+KeyC"}"#);
         assert_eq!(s.talk_shortcut, "Control+Shift+KeyC");
         assert_eq!(s.panel_shortcut, PANEL_FALLBACK);
+    }
+
+    #[test]
+    fn reads_a_server_env() {
+        let text = "# Captain\nDATABASE_URL=\"postgresql://postgres.abcxyz:p%40ss@aws-0-us-east-1.pooler.supabase.com:5432/postgres\"\nAPP_SECRET = 0123456789abcdef0123456789abcdef\nPORT=8787\n";
+        let (url, secret) = parse_env(text);
+        assert_eq!(url.as_deref(), Some("postgresql://postgres.abcxyz:p%40ss@aws-0-us-east-1.pooler.supabase.com:5432/postgres"));
+        assert_eq!(secret.as_deref(), Some("0123456789abcdef0123456789abcdef"));
+        assert_eq!(project_label(url.as_deref().unwrap()), "abcxyz");
+        assert_eq!(project_label("postgresql://postgres:pw@db.qwerty.supabase.co:5432/postgres"), "qwerty");
+        assert_eq!(parse_env("# DATABASE_URL=nope\n").0, None);
     }
 
     #[test]

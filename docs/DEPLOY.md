@@ -132,8 +132,9 @@ Until Quest Space's Developer ID is added (see Signing and notarizing below), th
 
 The app carries the server and runs it with the Mac's Node.js (22 or newer), on `http://127.0.0.1:8787`, only reachable from the Mac itself.
 
-- On first launch, choose **This Mac** and paste the database address (Supabase → Connect → Session pooler, with the password filled in). You can paste a whole server `.env` instead; its `APP_SECRET` comes along, so model keys saved by another Captain server on the same database keep working.
-- The address and secret are kept in the Keychain. Data uploads go to `~/Library/Application Support/ai.captainspace.desktop/files`, and the server's log is in `~/Library/Logs/ai.captainspace.desktop/server.log`.
+- On first launch, choose **This Mac**. If you ran the Captain server yourself before, the app finds its `server/.env` (in `~/captain-desktop`, `~/Documents/captain-desktop`, `~/Developer/captain-desktop`, `~/Projects/captain-desktop`, `~/code/captain-desktop` or `~/Documents/GitHub/captain-desktop`) and shows its Supabase project: click **Connect**. It uses that file's `DATABASE_URL` and `APP_SECRET`, so model keys saved by that server keep working. macOS may ask once to let Captain read your Documents folder.
+- Otherwise, paste the database address (Supabase → Connect → Session pooler, as it is) and type the database password in its own field; the app puts it in place of `[YOUR-PASSWORD]`. You can paste a whole server `.env` instead.
+- The address and secret are kept in `~/Library/Application Support/ai.captainspace.desktop/secrets.json`, readable only by you (mode 600), together with your session. Not the Keychain: until the app is signed with a Developer ID, each build has a new identity and macOS hides the earlier build's Keychain items, so every update asked for the database again. Data uploads go to `~/Library/Application Support/ai.captainspace.desktop/files`, and the server's log is in `~/Library/Logs/ai.captainspace.desktop/server.log`.
 - The server starts with the app and stops when you quit. The menu bar menu has **Restart Captain on this Mac**.
 - It serves the web app too: `http://127.0.0.1:8787` in any browser on that Mac.
 

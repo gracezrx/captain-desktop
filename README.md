@@ -63,7 +63,7 @@ It comes in four parts:
   - screen and region snapshots
   - voice typing (English or Chinese)
   - banners that open the right thread
-  - the session kept in the Keychain
+  - the session kept on the Mac, in a file only you can read
 
 ## Get it
 

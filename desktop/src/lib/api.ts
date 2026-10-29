@@ -1,6 +1,6 @@
 // The Captain API client: REST calls with the session's bearer token.
-// The session (server address and token) lives in the macOS Keychain in the
-// app, and in local storage on the web.
+// The session (server address and token) lives in a file only you can read in
+// the app's settings folder on the Mac, and in local storage on the web.
 
 import {isExtension, isTauri, LOCAL_SERVER, secretDelete, secretGet, secretSet} from './native';
 import type {Agent, AgentTool, Channel, ChannelMember, Dashboard, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
