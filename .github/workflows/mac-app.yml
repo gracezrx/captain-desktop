@@ -9,6 +9,11 @@ on:
         description: Attach the build to the app-latest release
         type: boolean
         default: true
+      runner:
+        description: Which Mac builds it (Intel runs on Apple Silicon through Rosetta; use it when Apple Silicon machines are busy)
+        type: choice
+        options: [macos-latest, macos-15-intel]
+        default: macos-latest
   push:
     tags: ['v*']
 
@@ -21,7 +26,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-latest # Apple Silicon
+    runs-on: ${{ inputs.runner || 'macos-latest' }} # Apple Silicon unless Intel is picked
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
