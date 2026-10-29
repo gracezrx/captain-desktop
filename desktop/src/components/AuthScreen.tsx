@@ -1,7 +1,7 @@
 import {useEffect, useState} from 'react';
 
 import {confirmPasswordReset, DEFAULT_SERVER, errorMessage, invitePreview, normalizeServer, requestPasswordReset, serverConfig, signIn, signUp, type StoredSession} from '../lib/api';
-import {isTauri, LOCAL_SERVER} from '../lib/native';
+import {isExtension, isTauri, LOCAL_SERVER} from '../lib/native';
 import type {InvitePreview} from '../lib/types';
 
 import {ThisMac, useLocalServer} from './ThisMac';
@@ -64,7 +64,7 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
     const [error, setError] = useState<string | null>(null);
     const [openSignup, setOpenSignup] = useState(true);
     const [preview, setPreview] = useState<InvitePreview | null>(null);
-    const onThisMac = isTauri && server === LOCAL_SERVER;
+    const onThisMac = (isTauri || isExtension) && server === LOCAL_SERVER;
     const local = useLocalServer(onThisMac);
 
     useEffect(() => {
@@ -82,6 +82,12 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // The extension may talk only to servers Chrome has let it reach: ask
+        // now, while this counts as a click.
+        if (isExtension && !(await allowServer(normalizeServer(server)))) {
+            setError('Captain needs permission to reach that server.');
+            return;
+        }
         setBusy(true);
         setError(null);
         try {
@@ -123,7 +129,7 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
     const disabled = busy || (mode === 'forgot' ? !email || !emailEnabled : mode === 'reset' ? password.length < 8 : !email || !password || (mode === 'signup' && (!name || signupBlocked)));
     const label = busy ? 'One moment…' : mode === 'forgot' ? 'Email me a link' : mode === 'reset' ? 'Set password and sign in' : mode === 'signin' ? 'Sign in' : joining ? 'Join workspace' : 'Create account';
 
-    const where = !recovering && (isTauri ? (
+    const where = !recovering && (isTauri || isExtension ? (
         <Where server={server} setServer={setServer}/>
     ) : import.meta.env.DEV ? (
         <div className='mt-5 text-center text-[12px] text-muted'>
@@ -149,7 +155,13 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
                         <h1 className='mt-5 text-[26px] font-extrabold tracking-tight text-ink'>{local.status && !local.status.configured ? 'Run Captain on this Mac' : 'Captain on this Mac'}</h1>
                         <p className='mt-1.5 text-[14px] text-muted'>Everything runs here; no terminal needed.</p>
                     </div>
-                    <ThisMac status={local.status} onChanged={local.refresh}/>
+                    {isExtension ? (
+                        <p className='rounded-2xl bg-bg-subtle px-4 py-3 text-center text-[13.5px] text-muted ring-1 ring-line'>
+                            Open the Captain app on your Mac. This extension connects to it as soon as it&apos;s running.
+                        </p>
+                    ) : (
+                        <ThisMac status={local.status} onChanged={local.refresh}/>
+                    )}
                     {where}
                 </div>
             </div>
@@ -239,7 +251,17 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
     );
 }
 
+async function allowServer(url: string): Promise<boolean> {
+    try {
+        const origins = [`${new URL(url).origin}/*`];
+        return (await chrome.permissions.contains({origins})) || (await chrome.permissions.request({origins}));
+    } catch {
+        return false;
+    }
+}
+
 // In the Mac app: run Captain here, or use a hosted Captain server.
+// In the extension: the app on this Mac, or a hosted Captain server.
 function Where({server, setServer}: {server: string; setServer: (s: string) => void}) {
     const here = server === LOCAL_SERVER;
     const [edit, setEdit] = useState(false);

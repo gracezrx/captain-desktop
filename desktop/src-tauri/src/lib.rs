@@ -437,7 +437,7 @@ fn start_local(app: &AppHandle) -> Result<(), String> {
         .env("PORT", LOCAL_PORT.to_string())
         .env("PUBLIC_URL", local_url())
         .env("FILES_DIR", data_dir.join("files"))
-        .env("WEB_DIST", server_dir.join("no-web"))
+        .env("WEB_DIST", server_dir.join("web"))
         .env("LOG_LEVEL", "info")
         .stdin(Stdio::null())
         .stdout(log.try_clone().map_err(|e| e.to_string())?)

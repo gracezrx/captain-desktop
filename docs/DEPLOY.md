@@ -118,29 +118,63 @@ To add or reprioritize models, edit `server/config/models.json`. Check the price
 
 ## The Mac app
 
+### Download it
+
+GitHub builds the app on a Mac: **Actions → Mac app → Run workflow** (leave "release" on). About ten minutes later, the [app-latest release](../../releases/tag/app-latest) has:
+
+- `Captain.dmg`: open it and drag Captain to Applications
+- `Captain-mac.zip`: the same app, zipped
+- `Captain-Chrome-extension.zip`: the extension
+
+The app is signed ad hoc, not with an Apple Developer ID, so macOS asks the first time: right-click Captain → **Open**. If macOS still refuses, open **System Settings → Privacy & Security** and click **Open Anyway**.
+
+### Captain on this Mac (the built-in server)
+
+The app carries the server and runs it with the Mac's Node.js (22 or newer), on `http://127.0.0.1:8787`, only reachable from the Mac itself.
+
+- On first launch, choose **This Mac** and paste the database address (Supabase → Connect → Session pooler, with the password filled in). You can paste a whole server `.env` instead; its `APP_SECRET` comes along, so model keys saved by another Captain server on the same database keep working.
+- The address and secret are kept in the Keychain. Data uploads go to `~/Library/Application Support/ai.captainspace.desktop/files`, and the server's log is in `~/Library/Logs/ai.captainspace.desktop/server.log`.
+- The server starts with the app and stops when you quit. The menu bar menu has **Restart Captain on this Mac**.
+- It serves the web app too: `http://127.0.0.1:8787` in any browser on that Mac.
+- To use a hosted server instead, choose **A Captain server** on the sign-in screen.
+
+### Build it yourself
+
 You need macOS 13 or newer, Xcode command-line tools, Rust (`rustup`), and Node 22.
 
 ```bash
 cd desktop
 npm install
-VITE_CAPTAIN_URL=https://captain.example.com npm run tauri build
+npm run tauri build -- --bundles app,dmg
 # → src-tauri/target/release/bundle/macos/Captain.app and dmg/Captain_0.1.0_aarch64.dmg
 ```
 
-- `VITE_CAPTAIN_URL` sets the server the app opens with; people can change it on the sign-in screen.
+- The build copies the server into the app first (`npm run bundle:server`).
+- `VITE_CAPTAIN_URL=https://captain.example.com` makes a hosted server the default instead of the built-in one.
 - `npm run tauri dev` runs the app against the dev server.
 - On first use, macOS asks for Screen Recording (snapshots), Microphone and Speech Recognition (voice typing), and Notifications.
 
 ### Shipping to testers
 
-Use your Apple Developer ID to sign and notarize, otherwise Gatekeeper blocks the app. Set these variables before `npm run tauri build`, and Tauri signs and notarizes:
+For an app that opens without warnings, sign and notarize with an Apple Developer ID. Set these variables (as repository secrets for the workflow) before building, and Tauri signs and notarizes:
 
 - `APPLE_SIGNING_IDENTITY`
 - `APPLE_ID`
 - `APPLE_PASSWORD` (an app-specific password)
 - `APPLE_TEAM_ID`
 
-For a universal build that runs on Intel and Apple Silicon: `npm run tauri build -- --target universal-apple-darwin`.
+## The Chrome extension
+
+Install: unzip `Captain-Chrome-extension.zip`, open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked**. To build it: `cd desktop && npm run build:extension` (output in `desktop/dist-extension`).
+
+- **Toolbar button (or ⌥⇧C):** a popup to write to any chat, see what needs you, and approve or reject decisions. The panel button opens the same view in Chrome's side panel, which stays open next to the page and shows each conversation.
+- **This page, Selection, Let agents read it:** add a link, a quote, or the page's text as a file agents read. Pages are read only when you click.
+- **Right-click → Send to Captain:** a page, a link, selected text, an image, or a screenshot of the tab.
+- **Badge:** decisions and mentions waiting for you, checked every minute.
+- **Server:** it signs in to the Mac app's built-in server (**This Mac**) or to a hosted one, which Chrome asks to allow at sign-in.
+- **Permissions:**
+  - The popup reads only the tab you opened it on.
+  - The side panel asks Chrome once for permission to read pages, the first time you use a page button there.
 
 ## Operating it
 

@@ -48,3 +48,4 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm run build
+      - run: npm run build:extension

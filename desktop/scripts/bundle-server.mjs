@@ -27,6 +27,12 @@ copy('dist');
 copy('config');
 copy(path.join('src', 'db', 'migrations'));
 copy('package.json');
+// The web app too, so Captain on this Mac also opens in a browser (and the
+// Chrome extension's "open dashboard" has somewhere to go).
+const web = path.join(desktop, 'dist');
+if (fs.existsSync(path.join(web, 'index.html'))) {
+    fs.cpSync(web, path.join(out, 'web'), {recursive: true});
+}
 copy('package-lock.json');
 run('npm ci --omit=dev --no-audit --no-fund --ignore-scripts', out);
 fs.rmSync(path.join(out, 'node_modules', '.bin'), {recursive: true, force: true});

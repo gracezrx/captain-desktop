@@ -5,7 +5,7 @@
 import {useEffect, useState} from 'react';
 
 import {errorMessage} from '../lib/api';
-import {isTauri, LOCAL_SERVER, localServerForget, localServerRestart, localServerSetup, localServerStatus, type LocalServerStatus, waitForServer} from '../lib/native';
+import {isExtension, isTauri, LOCAL_SERVER, localServerForget, localServerRestart, localServerSetup, localServerStatus, type LocalServerStatus, waitForServer} from '../lib/native';
 
 // Polls the server's state while `enabled`; `ready` means it answers requests.
 export function useLocalServer(enabled: boolean): {status: LocalServerStatus | null; ready: boolean; refresh: () => void} {
@@ -14,18 +14,19 @@ export function useLocalServer(enabled: boolean): {status: LocalServerStatus | n
     const [tick, setTick] = useState(0);
 
     useEffect(() => {
-        if (!enabled || !isTauri) {
+        if (!enabled || !(isTauri || isExtension)) {
             return;
         }
         let stopped = false;
         let timer: number | undefined;
         const poll = async () => {
-            const s = await localServerStatus();
+            // The extension can't see the app, only whether its server answers.
+            const s = isTauri ? await localServerStatus() : null;
             if (stopped) {
                 return;
             }
             setStatus(s);
-            const up = !!s?.running && (await waitForServer(LOCAL_SERVER, 1500));
+            const up = (isExtension || !!s?.running) && (await waitForServer(LOCAL_SERVER, 1500));
             if (stopped) {
                 return;
             }

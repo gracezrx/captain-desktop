@@ -275,3 +275,23 @@
     animation: none;
   }
 }
+
+/* The Chrome extension: the toolbar popup is a fixed small window; the side
+   panel fills Chrome's sidebar. */
+html.extension body {
+  background: var(--wash), var(--bg);
+}
+html.extension-popup,
+html.extension-popup body,
+html.extension-popup #root {
+  height: auto;
+}
+html.extension-popup body {
+  width: 400px;
+}
+html.extension-popup .ext-auth {
+  height: 580px;
+}
+html.extension-sidepanel .ext-panel {
+  min-height: 100vh;
+}

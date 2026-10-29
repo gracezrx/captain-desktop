@@ -9,11 +9,12 @@ Captain is a group chat where your team and its AI agents work together. Ask **@
 
 Anything that leaves the workspace, such as an email, waits for a person to approve it.
 
-It comes in three parts:
+It comes in four parts:
 
-- **A Mac app**: a dashboard window, plus a frosted panel that drops down from the menu bar. Press **⌥⇧Space** anywhere to write to any chat, snap your screen, talk instead of type, or approve what an agent wants to do.
+- **A Mac app**: a dashboard window, plus a frosted panel that drops down from the menu bar. Press **⌥⇧Space** anywhere to write to any chat, snap your screen, talk instead of type, or approve what an agent wants to do. It can run the Captain server itself, so nothing else needs installing.
+- **A Chrome extension**: a toolbar popup and a side panel with the same compact view. It can send the page you're on, selected text or a screenshot to a chat, let agents read the page when you click, and approve decisions.
 - **A web app** with the same interface, so testers can use a browser.
-- **A server** that does everything else: accounts, workspaces, chat, real time, model routing and multi-agent orchestration.
+- **A server** that does everything else: accounts, workspaces, chat, real time, model routing and multi-agent orchestration. It runs inside the Mac app, or hosted for a whole team.
 
 ![Dashboard](docs/screenshots/dashboard.png)
 
@@ -61,7 +62,14 @@ It comes in three parts:
   - banners that open the right thread
   - the session kept in the Keychain
 
-## Run it
+## Get it
+
+- **Mac app:** download `Captain.dmg` from the [app-latest release](../../releases/tag/app-latest), drag Captain to Applications, and right-click → Open the first time. On first launch, paste your database address (or your server `.env`) and Captain starts its own server.
+- **Chrome extension:** download `Captain-Chrome-extension.zip` from the same release, unzip it, open `chrome://extensions`, turn on Developer mode, and choose **Load unpacked**.
+
+GitHub builds both on a Mac whenever someone runs **Actions → Mac app → Run workflow**.
+
+## Run it from source
 
 ```bash
 createdb captain
@@ -84,7 +92,8 @@ The server runs on any Postgres 14 or newer, including Supabase ([docs/DEPLOY.md
 | `server/` | The backend: REST API, WebSocket, job workers, model router, agents. Also serves the web app. | Node 22, TypeScript, Fastify, Postgres (postgres.js), zod |
 | `server/config/models.json` | The model catalog: tiers, priorities, prices, provider routes. | |
 | `server/test/` | Integration tests against a real Postgres and scripted model providers. | `node:test` |
-| `desktop/` | The app: dashboard, menu bar panel, native core. | Tauri 2 (Rust), React 19, Tailwind 4, Zustand |
+| `desktop/` | The app: dashboard, menu bar panel, native core (including the built-in server's launcher). | Tauri 2 (Rust), React 19, Tailwind 4, Zustand |
+| `desktop/extension`, `desktop/src/extension` | The Chrome extension: manifest, popup and side panel pages, background worker. It reuses the menu bar panel's code. | Manifest V3 |
 | `Dockerfile`, `docker-compose.yml`, `render.yaml` | One image with the API and the web app; Compose and Render setups. | |
 
 ## Tests

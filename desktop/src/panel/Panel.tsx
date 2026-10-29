@@ -1,9 +1,9 @@
 import {AppWindow, ArrowLeft, Check, ChevronRight, Inbox, PenLine} from 'lucide-react';
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {type ReactNode, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import {ChatIcon} from '../components/ChatIcon';
 import {ChatPicker} from '../components/ChatPicker';
-import {Composer} from '../components/Composer';
+import {Composer, type Incoming} from '../components/Composer';
 import {plain} from '../components/Markup';
 import {MessageRow} from '../components/MessageRow';
 import {Typing} from '../components/Typing';
@@ -75,7 +75,20 @@ function SignedOut() {
     );
 }
 
-function Ready({target, setTarget}: {target: PanelTarget; setTarget: (t: PanelTarget) => void}) {
+// What the Chrome extension adds around the same panel.
+export type PanelExtras = {
+    tools?: ReactNode; // above the composer when writing
+    incoming?: Incoming | null; // handed to the composer
+    header?: ReactNode; // next to the "open dashboard" button
+    hints?: string[]; // the keyboard hints along the bottom
+    keepOpenAfterSend?: boolean;
+    openThreadAfterSend?: boolean; // show the conversation, so replies appear right there
+    tall?: boolean; // more room for the conversation (Chrome's side panel)
+};
+
+const MAC_HINTS = ['⏎ send', '⇧⏎ new line', 'hold ⌥ to talk', 'esc close'];
+
+export function Ready({target, setTarget, extras = {}}: {target: PanelTarget; setTarget: (t: PanelTarget) => void; extras?: PanelExtras}) {
     const channels = useStore((s) => s.channels);
     const members = useStore((s) => s.members);
     const posts = useStore((s) => s.posts);
@@ -100,21 +113,31 @@ function Ready({target, setTarget}: {target: PanelTarget; setTarget: (t: PanelTa
                         {waiting.length > 0 && <span className='min-w-4 rounded-full bg-gold px-1 text-center text-[10.5px] leading-4 text-white'>{waiting.length}</span>}
                     </button>
                 </div>
-                <button type='button' onClick={() => void openDashboard(target.channelId)} title='Open the dashboard' aria-label='Open the dashboard' className='ml-auto grid size-7 place-items-center rounded-full text-muted hover:bg-tint hover:text-ink'>
-                    <AppWindow size={15}/>
-                </button>
+                <span className='ml-auto flex items-center gap-0.5'>
+                    {extras.header}
+                    <button type='button' onClick={() => void openDashboard(target.channelId)} title='Open the dashboard' aria-label='Open the dashboard' className='grid size-7 place-items-center rounded-full text-muted hover:bg-tint hover:text-ink'>
+                        <AppWindow size={15}/>
+                    </button>
+                </span>
             </div>
-            {target.mode === 'compose' && <ComposeView/>}
+            {target.mode === 'compose' && (
+                <ComposeView
+                    tools={extras.tools}
+                    incoming={extras.incoming}
+                    keepOpen={extras.keepOpenAfterSend}
+                    onSentTo={extras.openThreadAfterSend ? (post) => setTarget({mode: 'thread', channelId: post.channelId, postId: post.id}) : undefined}
+                />
+            )}
             {target.mode === 'inbox' && <InboxView items={waiting} onOpen={(i) => setTarget({mode: 'thread', channelId: i.channelId, postId: i.postId})}/>}
-            {target.mode === 'thread' && target.channelId && <ThreadView channelId={target.channelId} postId={target.postId} onBack={() => setTarget({mode: 'inbox'})}/>}
+            {target.mode === 'thread' && target.channelId && <ThreadView channelId={target.channelId} postId={target.postId} tall={extras.tall} onBack={() => setTarget({mode: 'inbox'})}/>}
             <div className='flex items-center justify-center gap-3 border-t border-line/60 px-3 py-1.5 text-[10.5px] font-medium text-muted'>
-                <span>⏎ send</span><span>⇧⏎ new line</span><span>hold ⌥ to talk</span><span>esc close</span>
+                {(extras.hints ?? MAC_HINTS).map((h) => <span key={h}>{h}</span>)}
             </div>
         </>
     );
 }
 
-function ComposeView() {
+function ComposeView({tools, incoming, keepOpen, onSentTo}: {tools?: ReactNode; incoming?: Incoming | null; keepOpen?: boolean; onSentTo?: (post: Post) => void}) {
     const lastUsed = useStore((s) => s.lastUsedChannelId);
     const channels = useStore((s) => s.channels);
     const chats = useChats();
@@ -129,17 +152,24 @@ function ComposeView() {
         }
     }, [channelId, chats]);
 
-    const onSent = useCallback(() => {
+    const onSent = useCallback((post: Post) => {
+        if (onSentTo) {
+            onSentTo(post);
+            return;
+        }
         const title = channelTitle(channels[channelId ?? ''], me?.id, users);
         setSentTo(title);
         window.setTimeout(() => {
             setSentTo(null);
-            void hidePanel();
+            if (!keepOpen) {
+                void hidePanel();
+            }
         }, 900);
-    }, [channelId, channels, me, users]);
+    }, [channelId, channels, me, users, keepOpen, onSentTo]);
 
     return (
         <div className='px-3 pb-3'>
+            {tools}
             <Composer
                 channelId={channelId}
                 variant='panel'
@@ -148,6 +178,7 @@ function ComposeView() {
                 placeholder='What should the team know? Talk, type or snap.'
                 leading={<ChatPicker value={channelId} onChange={setChannelId}/>}
                 onSent={onSent}
+                incoming={incoming}
             />
             {sentTo && (
                 <div className='mt-2 flex items-center justify-center gap-1.5 text-[12.5px] font-semibold text-accent-text'>
@@ -227,7 +258,7 @@ function InboxView({items, onOpen}: {items: NeedsYouItem[]; onOpen: (i: NeedsYou
 }
 
 // The thread that needs you, with enough context to decide right here.
-function ThreadView({channelId, postId, onBack}: {channelId: string; postId?: string; onBack: () => void}) {
+function ThreadView({channelId, postId, onBack, tall}: {channelId: string; postId?: string; onBack: () => void; tall?: boolean}) {
     const channel = useStore((s) => s.channels[channelId]);
     const me = useStore((s) => s.me);
     const users = useStore((s) => s.users);
@@ -285,7 +316,7 @@ function ThreadView({channelId, postId, onBack}: {channelId: string; postId?: st
                 <span className='min-w-0 flex-1 truncate text-[13.5px] font-bold text-ink'>{channelTitle(channel, me?.id, users)}</span>
                 <button type='button' onClick={() => void openDashboard(channelId)} className='text-[12px] font-semibold text-accent-text hover:underline'>Open in dashboard</button>
             </div>
-            <div ref={scroller} className='scroll-quiet max-h-[380px] overflow-y-auto rounded-2xl bg-surface/70 px-2.5 pb-3 ring-1 ring-line'>
+            <div ref={scroller} className={`scroll-quiet ${tall ? 'max-h-[calc(100vh-240px)] min-h-48' : 'max-h-[380px]'} overflow-y-auto rounded-2xl bg-surface/70 px-2.5 pb-3 ring-1 ring-line`}>
                 {!loaded && <div className='py-8 text-center text-[12.5px] text-muted'>Loading…</div>}
                 {context.map((p) => <MessageRow key={p.id} post={p} compact/>)}
             </div>

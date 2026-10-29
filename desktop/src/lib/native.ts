@@ -1,12 +1,17 @@
 // Everything that needs macOS goes through here. Inside the Tauri app these
-// call the Rust core; in a plain browser (development) they fall back to
-// something reasonable so the UI can be built and tested without a Mac.
+// call the Rust core; in the Chrome extension they use Chrome's APIs; in a
+// plain browser they fall back to something reasonable.
 
 import {invoke} from '@tauri-apps/api/core';
 import {emitTo, listen, type UnlistenFn} from '@tauri-apps/api/event';
 import {getCurrentWindow, LogicalSize} from '@tauri-apps/api/window';
 
+import {captureTab} from '../extension/tab';
+
 export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+// The Chrome extension's pages (popup and side panel).
+export const isExtension = !isTauri && typeof chrome !== 'undefined' && !!chrome.runtime?.id && location.protocol === 'chrome-extension:';
+export const extensionSurface: 'popup' | 'sidepanel' | null = isExtension ? (location.pathname.includes('popup') ? 'popup' : 'sidepanel') : null;
 
 export type PanelMode = 'compose' | 'inbox' | 'thread';
 export type PanelTarget = {mode: PanelMode; channelId?: string; postId?: string};
@@ -22,7 +27,12 @@ export function windowLabel(): 'main' | 'panel' {
 
 const LOCAL_PREFIX = 'captain.';
 
+// In the extension, chrome.storage: shared with its background worker (the badge).
 export async function secretGet(key: string): Promise<string | null> {
+    if (isExtension) {
+        const v = (await chrome.storage.local.get(LOCAL_PREFIX + key))[LOCAL_PREFIX + key];
+        return typeof v === 'string' ? v : null;
+    }
     if (isTauri) {
         try {
             return await invoke<string | null>('secret_get', {key});
@@ -34,6 +44,10 @@ export async function secretGet(key: string): Promise<string | null> {
 }
 
 export async function secretSet(key: string, value: string): Promise<void> {
+    if (isExtension) {
+        await chrome.storage.local.set({[LOCAL_PREFIX + key]: value});
+        return;
+    }
     if (isTauri) {
         try {
             await invoke('secret_set', {key, value});
@@ -46,6 +60,10 @@ export async function secretSet(key: string, value: string): Promise<void> {
 }
 
 export async function secretDelete(key: string): Promise<void> {
+    if (isExtension) {
+        await chrome.storage.local.remove(LOCAL_PREFIX + key);
+        return;
+    }
     if (isTauri) {
         await invoke('secret_delete', {key}).catch(() => undefined);
     }
@@ -59,6 +77,9 @@ export async function notify(title: string, body: string, target: PanelTarget): 
         await invoke('notify', {title, body, target}).catch((e) => console.warn('notify failed', e));
         return;
     }
+    if (isExtension) {
+        return; // the toolbar badge says it instead
+    }
     if ('Notification' in window && Notification.permission === 'granted') {
         const n = new Notification(title, {body});
         n.onclick = () => showPanel(target);
@@ -70,12 +91,23 @@ export async function setBadge(count: number): Promise<void> {
         await invoke('set_badge', {count}).catch(() => undefined);
         return;
     }
+    if (isExtension) {
+        await chrome.action.setBadgeText({text: count > 0 ? String(count) : ''}).catch(() => undefined);
+        return;
+    }
     document.title = count > 0 ? `(${count}) Captain` : 'Captain';
 }
 
 // ------------------------------------------------------------ windows
 
+// In the extension the popup or side panel is the panel: switch its view.
+const panelListeners = new Set<(t: PanelTarget) => void>();
+
 export async function showPanel(target: PanelTarget): Promise<void> {
+    if (isExtension) {
+        panelListeners.forEach((fn) => fn(target));
+        return;
+    }
     if (isTauri) {
         await invoke('show_panel', {target});
         return;
@@ -87,10 +119,18 @@ export async function showPanel(target: PanelTarget): Promise<void> {
 export async function hidePanel(): Promise<void> {
     if (isTauri) {
         await invoke('hide_panel');
+    } else if (extensionSurface === 'popup') {
+        window.close();
     }
 }
 
 export async function openDashboard(channelId?: string): Promise<void> {
+    if (isExtension) {
+        // Captain's web app, from the server this extension is signed in to.
+        const {getServerUrl} = await import('./api');
+        await chrome.tabs.create({url: `${getServerUrl()}/${channelId ? `?channel=${channelId}` : ''}`});
+        return;
+    }
     if (isTauri) {
         await invoke('open_dashboard');
         if (channelId) {
@@ -102,6 +142,12 @@ export async function openDashboard(channelId?: string): Promise<void> {
 }
 
 export function onPanelTarget(handler: (t: PanelTarget) => void): () => void {
+    if (isExtension) {
+        panelListeners.add(handler);
+        const q = new URLSearchParams(location.search);
+        handler({mode: (q.get('mode') as PanelMode) || 'compose', channelId: q.get('channel') || undefined, postId: q.get('post') || undefined});
+        return () => panelListeners.delete(handler);
+    }
     if (isTauri) {
         let un: UnlistenFn | undefined;
         listen<PanelTarget>('panel-target', (e) => handler(e.payload)).then((u) => {
@@ -160,6 +206,9 @@ export function onRelayedEvent(handler: (event: unknown) => void): () => void {
 // ------------------------------------------------------------ screen capture
 
 export async function captureScreen(region: boolean): Promise<Blob | null> {
+    if (isExtension) {
+        return captureTab();
+    }
     if (isTauri) {
         const data = await invoke<ArrayBuffer>('capture_screen', {region});
         if (!data || data.byteLength === 0) {

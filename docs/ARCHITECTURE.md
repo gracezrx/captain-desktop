@@ -2,8 +2,28 @@
 
 Captain is one server and one app.
 
-- **The server** (`server/`) is a TypeScript service on Postgres. It handles accounts, workspaces, chat, real-time updates, model routing and multi-agent orchestration.
-- **The app** (`desktop/`) is React. It runs in the Mac app (Tauri), which adds the menu bar panel, the global shortcut, screen snapshots, banners and the Keychain. The same app also runs as the web app the server hosts at `/`.
+- **The server** (`server/`) is a TypeScript service on Postgres. It handles accounts, workspaces, chat, real-time updates, model routing and multi-agent orchestration. It runs hosted, or inside the Mac app.
+- **The app** (`desktop/`) is React, and runs in three places:
+  - **The Mac app (Tauri).** It adds the menu bar panel, the global shortcut, screen snapshots, banners and the Keychain. It can also start the server on the Mac: the code ships in the app's Resources and runs with the Mac's Node.js on 127.0.0.1:8787 (`src-tauri/src/lib.rs`, "built-in server").
+  - **The web app** the server hosts at `/`.
+  - **The Chrome extension** (`src/extension/`). It shows the menu bar panel's view in the toolbar popup and the side panel, and adds page tools, a right-click menu and a badge from a background worker.
+
+```mermaid
+flowchart LR
+    MAC[Mac app<br/>dashboard · menu bar panel] -- REST + WebSocket --> L
+    EXT[Chrome extension<br/>popup · side panel] -- REST + WebSocket --> L
+    EXT -. or .-> H
+    MAC -. or .-> H
+    WEB[Browser] --> H
+    subgraph MacBox[On your Mac]
+        MAC -- starts and stops --> L[Captain server<br/>127.0.0.1:8787]
+    end
+    H[Hosted Captain server<br/>Render, Docker…]
+    L --> DB[(Postgres<br/>e.g. Supabase)]
+    H --> DB
+```
+
+Both servers can share one database: they're then two instances of the same Captain, and real-time events pass between them through Postgres.
 
 The server copies how Mattermost is built: its layers, its real-time protocol, and the way it treats bots and message hooks. It uses none of Mattermost's code.
 

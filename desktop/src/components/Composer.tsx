@@ -20,7 +20,12 @@ type Props = {
     leading?: ReactNode;
     draftKey?: string;
     onSent?: (post: Post) => void;
+    // Something handed over from outside (the Chrome extension: a page link,
+    // selected text, page text or a screenshot). A new nonce adds it once.
+    incoming?: Incoming | null;
 };
+
+export type Incoming = {nonce: number; text?: string; files?: {blob: Blob; name?: string}[]};
 
 type Suggestion = {id: string; insert: string; label: string; hint: string; userId: string};
 
@@ -43,7 +48,7 @@ function useSuggestions(query: string | null): Suggestion[] {
     }, [agents, users, meId, query]);
 }
 
-export function Composer({channelId, rootId = null, variant, placeholder, autoFocus, leading, draftKey, onSent}: Props) {
+export function Composer({channelId, rootId = null, variant, placeholder, autoFocus, leading, draftKey, onSent, incoming}: Props) {
     const storageKey = draftKey ? `captain.draft.${draftKey}` : null;
     const [text, setText] = useState(() => (storageKey ? localStorage.getItem(storageKey) ?? '' : ''));
     const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -84,6 +89,20 @@ export function Composer({channelId, rootId = null, variant, placeholder, autoFo
     }, [autoFocus, channelId]);
 
     const addBlob = (blob: Blob, name?: string) => setAttachments((a) => [...a, makeAttachment(blob, name)]);
+
+    const lastIncoming = useRef(0);
+    useEffect(() => {
+        if (!incoming || incoming.nonce === lastIncoming.current) {
+            return;
+        }
+        lastIncoming.current = incoming.nonce;
+        const add = incoming.text?.trim();
+        if (add) {
+            setText((t) => (t.trim() ? `${t.replace(/\s+$/, '')}\n${add}` : add));
+        }
+        setAttachments((a) => [...a, ...(incoming.files ?? []).map((f) => makeAttachment(f.blob, f.name))]);
+        area.current?.focus();
+    }, [incoming]);
 
     const snapshot = async (region: boolean) => {
         setCapturing(true);
