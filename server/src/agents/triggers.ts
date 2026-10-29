@@ -32,11 +32,20 @@ export function mentionedHandles(message: string): string[] {
 async function agentsToRun(ctx: Ctx, saved: SavedPost): Promise<Chosen> {
     const {post, channel} = saved;
     const none: Chosen = {agents: [], team: null};
+    const handles = mentionedHandles(post.message);
     if (channel.type === 'D') {
         const others = (await listChannelMemberIds(ctx.sql, channel.id)).filter((id) => id !== post.userId);
-        return {agents: (await getAgentsByUserIds(ctx.sql, others)).filter((a) => a.enabled), team: null};
+        const dmAgents = (await getAgentsByUserIds(ctx.sql, others)).filter((a) => a.enabled);
+        // In your DM with Captain, naming agents means Captain works with just them.
+        const captain = dmAgents.length === 1 && dmAgents[0].isCoordinator ? dmAgents[0] : null;
+        if (captain && handles.length) {
+            const team = (await listAgents(ctx.sql, channel.workspaceId)).filter((a) => a.enabled && !a.isCoordinator && handles.includes(a.handle.toLowerCase())).slice(0, MAX_AGENTS_PER_MESSAGE);
+            if (team.length) {
+                return {agents: [captain, ...team], team: team.map((a) => a.id)};
+            }
+        }
+        return {agents: dmAgents, team: null};
     }
-    const handles = mentionedHandles(post.message);
     if (handles.length) {
         const all = await listAgents(ctx.sql, channel.workspaceId);
         const named = all.filter((a) => a.enabled && handles.includes(a.handle.toLowerCase())).slice(0, MAX_AGENTS_PER_MESSAGE);
@@ -50,7 +59,8 @@ async function agentsToRun(ctx: Ctx, saved: SavedPost): Promise<Chosen> {
             if (captain && team.length) {
                 return {agents: [captain, ...team], team: team.map((a) => a.id)};
             }
-            return {agents: named.slice(0, 1), team: null};
+            // Captain is turned off: each named agent answers on its own.
+            return {agents: named, team: null};
         }
         if (handles.some((h) => !['channel', 'all', 'here'].includes(h))) {
             return none; // mentioned people, not agents

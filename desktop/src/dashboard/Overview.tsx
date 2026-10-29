@@ -55,7 +55,12 @@ function useDashboard(): {data: Dashboard | null; error: string | null; now: num
             return;
         }
         try {
-            setData(await api.dashboard(wsId));
+            const next = await api.dashboard(wsId);
+            // Switched workspaces while this was loading: drop it.
+            if (useStore.getState().workspace?.id !== wsId) {
+                return;
+            }
+            setData(next);
             setError(null);
         } catch (e) {
             setError(errorMessage(e));

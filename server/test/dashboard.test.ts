@@ -80,6 +80,7 @@ describe('home dashboard', () => {
 
         const mine = await dash(member.api);
         assert.equal(mine.usage, null);
+        assert.ok(mine.recent.every((r) => r.tokens === 0 && r.costUsd === 0), 'no per-task spend for members');
         assert.ok(mine.recent.some((r) => r.goal.includes('slowly')), 'a task in #general');
         assert.equal(mine.recent.some((r) => r.channelId === secret.id), false, 'not a task in a channel Mia isn\'t in');
     });

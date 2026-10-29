@@ -87,24 +87,31 @@ export function validatePlan(raw: unknown, team: AgentRow[], maxSteps: number, m
 
 // The plan when someone names the agents and the planner can't help: each
 // named agent works on the request at the same time; Captain combines them.
-export function namedPlan(team: AgentRow[], text: string): Plan {
+export function namedPlan(team: AgentRow[], text: string, maxSteps = config.agents.maxSteps): Plan {
     const ask = text.replace(/(^|\s)@[a-z0-9._-]+[,:]?/gi, ' ').replace(/\s+/g, ' ').trim() || text;
     return {
         mode: 'plan',
         goal: ask.slice(0, 140),
-        steps: team.map((a, i) => ({id: `s${i + 1}`, agentId: a.id, title: `${a.name}'s part`, instructions: `As ${a.name} (${a.description}), work on: ${ask}`, dependsOn: []})),
+        steps: team.slice(0, Math.max(1, maxSteps)).map((a, i) => ({id: `s${i + 1}`, agentId: a.id, title: `${a.name}'s part`, instructions: `As ${a.name} (${a.description}), work on: ${ask}`, dependsOn: []})),
     };
 }
 
-// Every named agent has a step: add one for anyone the planner left out.
-function coverNamed(plan: Plan, team: AgentRow[], text: string): Plan {
+// Every named agent has a step: add one for anyone the planner left out
+// (or, if that would go past the step limit, give each named agent one step).
+function coverNamed(plan: Plan, team: AgentRow[], text: string, maxSteps: number): Plan {
     if (plan.mode !== 'plan') {
-        return namedPlan(team, text);
+        return namedPlan(team, text, maxSteps);
     }
     const used = new Set(plan.steps.map((st) => st.agentId));
     const missing = team.filter((a) => !used.has(a.id));
-    const extra = namedPlan(missing, text);
-    if (extra.mode !== 'plan' || !missing.length) {
+    if (!missing.length) {
+        return plan;
+    }
+    if (plan.steps.length + missing.length > maxSteps) {
+        return namedPlan(team, text, maxSteps);
+    }
+    const extra = namedPlan(missing, text, maxSteps);
+    if (extra.mode !== 'plan') {
         return plan;
     }
     const taken = new Set(plan.steps.map((st) => st.id));
@@ -140,7 +147,7 @@ export async function makePlan(ctx: Ctx, args: {captain: AgentRow; team: AgentRo
             attribution: {userId: args.requesterId, agentId: args.captain.id, runId: args.runId},
         });
         const plan = validatePlan(parseJson(res.text), specialists, config.agents.maxSteps, named ? 1 : 2);
-        return named ? coverNamed(plan, specialists, args.text) : plan;
+        return named ? coverNamed(plan, specialists, args.text, config.agents.maxSteps) : plan;
     } catch (e) {
         if (args.signal.aborted) {
             throw e;

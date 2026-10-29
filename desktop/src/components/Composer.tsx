@@ -6,7 +6,7 @@ import {getVoiceLang, setVoiceLang, useDictation, type VoiceLang} from '../lib/d
 import {captureScreen} from '../lib/native';
 import {sendTyping} from '../lib/realtime';
 import {type Attachment, makeAttachment, sendMessage} from '../lib/send';
-import {useStore} from '../lib/store';
+import {agentForUser, otherUserId, useStore} from '../lib/store';
 import type {Post} from '../lib/types';
 
 import {Avatar} from './Avatar';
@@ -48,25 +48,31 @@ function useSuggestions(query: string | null): Suggestion[] {
     }, [agents, users, meId, query]);
 }
 
-// Two or more agents named outside a direct message: Captain coordinates
-// them (the same rule as the server's triggers).
+// When Captain will coordinate the agents you named (the same rule as the
+// server's triggers): two or more named in a channel, or any named in your
+// direct message with Captain. Other direct messages ignore mentions.
 function useTeamHint(text: string, channelId: string | null): string | null {
     const agents = useStore((s) => s.agents);
-    const direct = useStore((s) => (channelId ? s.channels[channelId]?.type === 'D' : false));
+    const channel = useStore((s) => (channelId ? s.channels[channelId] : undefined));
+    const meId = useStore((s) => s.me?.id ?? '');
     return useMemo(() => {
-        if (direct || !text.includes('@')) {
+        if (!text.includes('@') || !Object.values(agents).some((a) => a.isCoordinator && a.enabled)) {
+            return null;
+        }
+        const withCaptain = channel?.type === 'D' && Boolean(agentForUser(agents, otherUserId(channel, meId))?.isCoordinator);
+        if (channel?.type === 'D' && !withCaptain) {
             return null;
         }
         const handles = new Set([...text.matchAll(/(?:^|[^\w@.])@([a-z0-9][a-z0-9._-]{0,40})/gi)].map((m) => m[1].toLowerCase().replace(/[._-]+$/, '')));
         const named = Object.values(agents).filter((a) => a.enabled && handles.has(a.handle.toLowerCase()));
         const team = named.filter((a) => !a.isCoordinator);
-        if (named.length < 2 || !team.length || !Object.values(agents).some((a) => a.isCoordinator && a.enabled)) {
+        if (!team.length || (!withCaptain && named.length < 2)) {
             return null;
         }
         const names = team.map((a) => `@${a.handle}`);
         const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
         return team.length === 1 ? `Captain will work with ${list} and post one answer.` : `Captain will split this between ${list} and post one combined answer.`;
-    }, [agents, direct, text]);
+    }, [agents, channel, meId, text]);
 }
 
 export function Composer({channelId, rootId = null, variant, placeholder, autoFocus, leading, draftKey, onSent, incoming}: Props) {

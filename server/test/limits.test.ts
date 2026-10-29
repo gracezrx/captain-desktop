@@ -95,6 +95,61 @@ describe('model call limits', () => {
     });
 });
 
+describe('low credit on one provider', () => {
+    let s: TestServer;
+    let poor: Awaited<ReturnType<typeof fakeProvider>>;
+    let rich: Awaited<ReturnType<typeof fakeProvider>>;
+    let slow: Awaited<ReturnType<typeof fakeProvider>>;
+
+    before(async () => {
+        poor = await fakeProvider(() => ({status: 402, errorMessage: 'This request requires more credits, or fewer max_tokens. You requested up to 4000 tokens, but can only afford 100.'}));
+        rich = await fakeProvider(() => ({text: 'from the other provider'}));
+        slow = await fakeProvider(() => ({text: 'slow', delayMs: 1500}));
+        process.env.TEST_SPLIT_KEY = 'k';
+        s = await startServer({catalog: new Catalog({
+            providers: {
+                poor: {label: 'Poor', baseUrl: poor.url, apiKeyEnv: 'TEST_SPLIT_KEY'},
+                rich: {label: 'Rich', baseUrl: rich.url, apiKeyEnv: 'TEST_SPLIT_KEY'},
+                slow: {label: 'Slow', baseUrl: slow.url, apiKeyEnv: 'TEST_SPLIT_KEY'},
+            },
+            models: [model('m-split', 'easy', 100, [['poor', 'a'], ['rich', 'b']]), model('m-wait', 'hard', 100, [['slow', 'c']])],
+        })});
+    });
+    after(async () => {
+        await s.stop();
+        await Promise.all([poor.close(), rich.close(), slow.close()]);
+    });
+
+    it('moves to the next provider without shrinking its answer', async () => {
+        const owner = await signup(s.base, {workspaceName: 'Split'});
+        const [{id}] = await owner.api.get('/workspaces');
+        const res = await s.instance.ctx.router.complete({workspaceId: id, purpose: 'reply', tier: 'easy', pinnedModel: 'm-split', messages: [{role: 'user', content: 'hi'}]});
+        assert.equal(res.provider, 'rich');
+        assert.equal(poor.requests.length, 1, 'too little credit to be worth a shorter try');
+        assert.equal(rich.requests[0].max_tokens, config.llm.maxOutputTokens);
+    });
+
+    it('a stopped run stops waiting for its turn', async () => {
+        const owner = await signup(s.base, {workspaceName: 'Waiting'});
+        const [{id}] = await owner.api.get('/workspaces');
+        const was = config.llm.maxConcurrentPerProvider;
+        config.llm.maxConcurrentPerProvider = 1;
+        try {
+            const call = (signal?: AbortSignal) => s.instance.ctx.router.complete({workspaceId: id, purpose: 'reply', tier: 'hard', pinnedModel: 'm-wait', messages: [{role: 'user', content: 'hi'}], signal});
+            const first = call();
+            const ctrl = new AbortController();
+            const second = call(ctrl.signal);
+            const started = Date.now();
+            setTimeout(() => ctrl.abort(), 100);
+            await assert.rejects(second, /cancelled/);
+            assert.ok(Date.now() - started < 1000, 'it stops right away, not when the first call ends');
+            await first;
+        } finally {
+            config.llm.maxConcurrentPerProvider = was;
+        }
+    });
+});
+
 describe('out of credit', () => {
     let s: TestServer;
     let broke: Awaited<ReturnType<typeof fakeProvider>>;

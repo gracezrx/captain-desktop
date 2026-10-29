@@ -38,7 +38,8 @@ type Health = {fails: number; until: number; lastError: string | null};
 const FAILS_TO_OPEN = 3;
 const OPEN_MS = 120_000;
 const RATE_LIMIT_WAIT_MS = 1500;
-const CREDIT_CAP_MS = 10 * 60_000;
+const CREDIT_CAP_MS = 5 * 60_000;
+const MIN_USEFUL_TOKENS = 256;
 
 function defaultMaxTokens(purpose: Purpose): number {
     return purpose === 'classify' ? 16 : purpose === 'plan' ? 1500 : config.llm.maxOutputTokens;
@@ -60,12 +61,17 @@ export function creditShortfall(err: LlmError): {affordable: number | null} | nu
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) {
+        return Promise.resolve();
+    }
     return new Promise((resolve) => {
-        const t = setTimeout(resolve, ms);
-        signal?.addEventListener('abort', () => {
+        const done = () => {
             clearTimeout(t);
+            signal?.removeEventListener('abort', done);
             resolve();
-        }, {once: true});
+        };
+        const t = setTimeout(done, ms);
+        signal?.addEventListener('abort', done, {once: true});
     });
 }
 
@@ -85,6 +91,9 @@ export class Router {
             if (providerIds.some((id) => key.endsWith(`|${id}`))) {
                 this.health.delete(key);
             }
+        }
+        for (const id of providerIds) {
+            this.creditCaps.delete(id);
         }
     }
 
@@ -154,7 +163,7 @@ export class Router {
         }
 
         // Every call asks for a bounded answer (see config.llm.maxOutputTokens).
-        let maxTokens = req.maxTokens ?? defaultMaxTokens(req.purpose);
+        const maxTokens = req.maxTokens ?? defaultMaxTokens(req.purpose);
         let lowCredit = false;
         let lastError: unknown = null;
         const queue = [...list];
@@ -166,9 +175,11 @@ export class Router {
                 if (h && h.until > Date.now()) {
                     continue;
                 }
+                // Low credit on one provider only shortens answers from that provider.
+                let routeTokens = maxTokens;
                 for (let attempt = 1; attempt <= 3; attempt++) {
                     const started = Date.now();
-                    const ask = this.affordable(route.providerId, maxTokens);
+                    const ask = this.affordable(route.providerId, routeTokens);
                     try {
                         const res = await this.withSlot(route.providerId, req.signal, () => chatCompletion(
                             {baseUrl: route.baseUrl, apiKey: route.apiKey, model: route.upstream, headers: route.headers},
@@ -198,20 +209,23 @@ export class Router {
                         const credit = creditShortfall(err);
                         if (credit) {
                             lowCredit = true;
-                            const smaller = credit.affordable && credit.affordable >= 256 ? Math.floor(credit.affordable * 0.8) : Math.min(ask, 1000);
-                            if (smaller < ask && attempt < 3) {
+                            // What the provider says it can afford, or else a guess: 1,000, then half.
+                            const smaller = credit.affordable !== null ? Math.floor(credit.affordable * 0.8) : ask > 1000 ? 1000 : Math.floor(ask / 2);
+                            if (smaller >= MIN_USEFUL_TOKENS && smaller < ask && attempt < 3) {
                                 log.info({model: model.id, from: ask, to: smaller}, 'low credit; asking for a shorter answer');
-                                maxTokens = smaller;
+                                routeTokens = smaller;
                                 // Other calls to this provider ask for no more for a while.
-                                this.creditCaps.set(route.providerId, {tokens: smaller, until: Date.now() + CREDIT_CAP_MS});
+                                if (credit.affordable !== null) {
+                                    this.creditCaps.set(route.providerId, {tokens: smaller, until: Date.now() + CREDIT_CAP_MS});
+                                }
                                 continue;
                             }
                             queue.sort((a, b) => price(a) - price(b));
                             break;
                         }
-                        // A failing route is skipped for a while (account-wide
-                        // limits like the two above don't count against it).
-                        if (err.status !== 429) {
+                        // A failing route is skipped for a while. Credit limits don't
+                        // count against it, nor do rate limits until all three tries hit one.
+                        if (err.status !== 429 || attempt >= 3) {
                             const prev = this.health.get(key) ?? {fails: 0, until: 0, lastError: null};
                             const fails = prev.fails + 1;
                             this.health.set(key, {fails, until: fails >= FAILS_TO_OPEN ? Date.now() + OPEN_MS : 0, lastError: err.message.slice(0, 300)});
@@ -249,12 +263,31 @@ export class Router {
             s = {active: 0, waiting: []};
             this.slots.set(provider, s);
         }
-        while (s.active >= Math.max(1, config.llm.maxConcurrentPerProvider)) {
-            await new Promise<void>((resolve) => s!.waiting.push(resolve));
+        let woken = false;
+        while (s.active >= Math.max(1, config.llm.maxConcurrentPerProvider) || (woken && signal?.aborted)) {
             if (signal?.aborted) {
-                s.waiting.shift()?.(); // pass the turn on
+                if (woken) {
+                    s.waiting.shift()?.(); // pass the turn on
+                }
                 throw new LlmError('cancelled', 0, false);
             }
+            // Wait for a turn; stopping the run stops the wait.
+            await new Promise<void>((resolve, reject) => {
+                const turn = () => {
+                    signal?.removeEventListener('abort', stop);
+                    resolve();
+                };
+                const stop = () => {
+                    const i = s!.waiting.indexOf(turn);
+                    if (i >= 0) {
+                        s!.waiting.splice(i, 1);
+                    }
+                    reject(new LlmError('cancelled', 0, false));
+                };
+                s!.waiting.push(turn);
+                signal?.addEventListener('abort', stop, {once: true});
+            });
+            woken = true;
         }
         s.active++;
         try {

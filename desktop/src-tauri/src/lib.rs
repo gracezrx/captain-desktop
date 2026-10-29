@@ -598,16 +598,30 @@ fn local_server_forget(app: AppHandle) -> Result<(), String> {
 struct Settings {
     panel_shortcut: String,
     talk_shortcut: String,
-    /// Set once the person picks their own keys; until then the shortcuts
-    /// follow the app's defaults (which can change between versions).
-    panel_custom: bool,
-    talk_custom: bool,
+    /// Whether the person picked these keys themselves. Keys they didn't pick
+    /// follow the app's defaults, which can change between versions. Missing
+    /// in settings saved before this existed (see `load_settings`).
+    panel_custom: Option<bool>,
+    talk_custom: Option<bool>,
     orb_visible: bool,
     orb_position: Option<(i32, i32)>,
 }
 
 const PANEL_SHORTCUT: &str = "Control+Shift+C";
 const TALK_SHORTCUT: &str = "Control+Shift+Space";
+/// The panel's default before Oct 29 (⌘⇧Space is Lock In's).
+const OLD_PANEL_SHORTCUT: &str = "Command+Shift+Space";
+/// The panel's default when the talk shortcut already uses ⌃⇧C.
+const PANEL_FALLBACK: &str = "Control+Alt+C";
+
+/// Whether two shortcut texts mean the same keys ("Control+Shift+C" and
+/// "Control+Shift+KeyC" do).
+fn same_keys(a: &str, b: &str) -> bool {
+    match (Shortcut::from_str(a), Shortcut::from_str(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a.eq_ignore_ascii_case(b),
+    }
+}
 
 impl Default for Settings {
     fn default() -> Self {
@@ -616,8 +630,9 @@ impl Default for Settings {
         Self {
             panel_shortcut: PANEL_SHORTCUT.into(),
             talk_shortcut: TALK_SHORTCUT.into(),
-            panel_custom: false,
-            talk_custom: false,
+            // Missing from older settings files; worked out in settle_shortcuts.
+            panel_custom: None,
+            talk_custom: None,
             orb_visible: true,
             orb_position: None,
         }
@@ -629,16 +644,28 @@ fn settings_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn load_settings(app: &AppHandle) -> Settings {
-    let mut settings: Settings = settings_path(app)
+    let settings: Settings = settings_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default();
+    settle_shortcuts(settings)
+}
+
+fn settle_shortcuts(mut settings: Settings) -> Settings {
+    // Settings from before the flags existed: keys that differ from the old
+    // defaults were picked by the person, and stay.
+    let panel_custom = settings
+        .panel_custom
+        .unwrap_or_else(|| !same_keys(&settings.panel_shortcut, OLD_PANEL_SHORTCUT) && !same_keys(&settings.panel_shortcut, PANEL_SHORTCUT));
+    let talk_custom = settings.talk_custom.unwrap_or_else(|| !same_keys(&settings.talk_shortcut, TALK_SHORTCUT));
+    settings.panel_custom = Some(panel_custom);
+    settings.talk_custom = Some(talk_custom);
     // Keys nobody picked follow the current defaults.
-    if !settings.panel_custom {
-        settings.panel_shortcut = PANEL_SHORTCUT.into();
-    }
-    if !settings.talk_custom {
+    if !talk_custom {
         settings.talk_shortcut = TALK_SHORTCUT.into();
+    }
+    if !panel_custom {
+        settings.panel_shortcut = if same_keys(&settings.talk_shortcut, PANEL_SHORTCUT) { PANEL_FALLBACK.into() } else { PANEL_SHORTCUT.into() };
     }
     settings
 }
@@ -742,10 +769,10 @@ fn shortcut_set(app: AppHandle, kind: String, keys: String) -> ShortcutStatus {
         {
             let mut settings = app.state::<Mutex<Settings>>().inner().lock().unwrap();
             if kind == "talk" {
-                settings.talk_custom = keys != TALK_SHORTCUT;
+                settings.talk_custom = Some(!same_keys(&keys, TALK_SHORTCUT));
                 settings.talk_shortcut = keys;
             } else {
-                settings.panel_custom = keys != PANEL_SHORTCUT;
+                settings.panel_custom = Some(!same_keys(&keys, PANEL_SHORTCUT));
                 settings.panel_shortcut = keys;
             }
         }
@@ -1160,4 +1187,42 @@ pub fn run() {
             }
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn from(json: &str) -> Settings {
+        settle_shortcuts(serde_json::from_str(json).unwrap())
+    }
+
+    #[test]
+    fn old_default_panel_key_moves_to_the_new_one() {
+        let s = from(r#"{"panelShortcut":"Command+Shift+Space","talkShortcut":"Control+Shift+Space","orbVisible":true}"#);
+        assert_eq!(s.panel_shortcut, PANEL_SHORTCUT);
+        assert_eq!(s.talk_shortcut, TALK_SHORTCUT);
+        assert_eq!(s.panel_custom, Some(false));
+    }
+
+    #[test]
+    fn keys_someone_picked_stay_after_an_upgrade() {
+        let s = from(r#"{"panelShortcut":"Control+Alt+KeyP","talkShortcut":"Control+Alt+KeyT"}"#);
+        assert_eq!(s.panel_shortcut, "Control+Alt+KeyP");
+        assert_eq!(s.talk_shortcut, "Control+Alt+KeyT");
+        assert_eq!((s.panel_custom, s.talk_custom), (Some(true), Some(true)));
+    }
+
+    #[test]
+    fn the_panel_default_steps_aside_when_talk_uses_its_keys() {
+        let s = from(r#"{"panelShortcut":"Command+Shift+Space","talkShortcut":"Control+Shift+KeyC"}"#);
+        assert_eq!(s.talk_shortcut, "Control+Shift+KeyC");
+        assert_eq!(s.panel_shortcut, PANEL_FALLBACK);
+    }
+
+    #[test]
+    fn a_fresh_install_uses_the_defaults() {
+        let s = from("{}");
+        assert_eq!((s.panel_shortcut.as_str(), s.talk_shortcut.as_str()), (PANEL_SHORTCUT, TALK_SHORTCUT));
+    }
 }

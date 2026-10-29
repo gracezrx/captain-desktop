@@ -27,13 +27,20 @@ export async function dashboard(ctx: Ctx, user: UserRow, workspaceId: string, of
         recentRuns(ctx.sql, workspaceId, user.id, week),
         runCounts(ctx.sql, workspaceId, user.id, today, week),
     ]);
-    const tokens = await tokensByRun(ctx.sql, workspaceId, [...active, ...recent].map((r) => r.id));
-    const shape = async (r: RunRow): Promise<ActivityRun> => ({
-        ...toRun(r, await listSteps(ctx.sql, r.id)),
-        agentId: r.agentId, requestedBy: r.requestedBy, team: r.team ?? null, triggerPostId: r.triggerPostId, tokens: tokens.get(r.id) ?? 0,
-    });
+    // Tokens and spend are for owners and admins (as in Settings → Models & spend).
+    const admin = atLeast(role, 'admin');
+    const tokens = admin ? await tokensByRun(ctx.sql, workspaceId, [...active, ...recent].map((r) => r.id)) : new Map<string, number>();
+    const shape = async (r: RunRow): Promise<ActivityRun> => {
+        const run = toRun(r, await listSteps(ctx.sql, r.id));
+        return {
+            ...run,
+            costUsd: admin ? run.costUsd : 0,
+            steps: admin ? run.steps : run.steps.map((st) => ({...st, costUsd: 0})),
+            agentId: r.agentId, requestedBy: r.requestedBy, team: r.team ?? null, triggerPostId: r.triggerPostId, tokens: tokens.get(r.id) ?? 0,
+        };
+    };
     let usage = null;
-    if (atLeast(role, 'admin')) {
+    if (admin) {
         const ws = await getWorkspace(ctx.sql, workspaceId);
         usage = await usageOverview(ctx.sql, workspaceId, ws?.monthlyBudgetUsd ?? null, offsetMin, at);
     }

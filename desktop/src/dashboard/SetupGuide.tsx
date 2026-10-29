@@ -11,7 +11,7 @@ import {getServerUrl} from '../lib/api';
 import {getVoiceLang} from '../lib/dictation';
 import {
     captureScreen, isTauri, LOCAL_SERVER, localServerStatus, type LocalServerStatus, notify, onVoice, openExternal, RELEASE_PAGE, revealChromeExtension,
-    setTalkButtonVisible, shortcutsGet, type ShortcutStatus, speak, talkButtonVisible, voiceStart, voiceStop,
+    setTalkButtonVisible, shortcutsGet, type ShortcutStatus, speak, talkButtonVisible, voiceCancel, voiceStart, voiceStop,
 } from '../lib/native';
 import {markSetupSeen} from '../lib/setup';
 import {useShortcutLabels} from '../lib/shortcuts';
@@ -177,7 +177,7 @@ export function RoomRules() {
         <ul className='space-y-1.5'>
             <li><b className='text-ink'>Mention one agent</b> (&ldquo;@researcher find …&rdquo;): that agent answers in the thread.</li>
             <li><b className='text-ink'>Mention two or more</b> (&ldquo;@researcher @writer …&rdquo;): Captain coordinates. It splits the work between just the agents you named, each does its part (one can build on another&apos;s), and Captain posts one combined answer. The plan card shows who&apos;s doing what, live.</li>
-            <li><b className='text-ink'>Mention @captain</b> or write in a direct message with Captain: Captain decides who on the team should help.</li>
+            <li><b className='text-ink'>Mention @captain</b> or write in a direct message with Captain: Captain decides who on the team should help. Name agents in that message and Captain works with just them.</li>
             <li><b className='text-ink'>Reply in the thread</b> to keep going with the same agent or team.</li>
             <li>Anything that leaves the workspace (an email, a post) waits for a yes from you or an admin.</li>
         </ul>
@@ -214,6 +214,9 @@ function VoiceTest({onWorked}: {onWorked: () => void}) {
     const [error, setError] = useState<string | null>(null);
     const timer = useRef<number | null>(null);
     const heardRef = useRef('');
+    const listening = useRef(false);
+    const worked = useRef(onWorked);
+    worked.current = onWorked;
     const keys = useShortcutLabels();
 
     useEffect(() => onVoice('setup', (e) => {
@@ -224,6 +227,7 @@ function VoiceTest({onWorked}: {onWorked: () => void}) {
             setError(e.message);
             setPhase('failed');
         } else if (e.type === 'end') {
+            listening.current = false;
             if (timer.current) {
                 window.clearTimeout(timer.current);
             }
@@ -236,14 +240,18 @@ function VoiceTest({onWorked}: {onWorked: () => void}) {
             setPhase('speaking');
             void speak(`I heard: ${text}`, getVoiceLang()).finally(() => {
                 setPhase('worked');
-                onWorked();
+                worked.current();
             });
         }
-    }), [onWorked]);
+    }), []);
 
+    // Closing the guide mid-test turns the microphone off.
     useEffect(() => () => {
         if (timer.current) {
             window.clearTimeout(timer.current);
+        }
+        if (listening.current) {
+            void voiceCancel();
         }
     }, []);
 
@@ -252,9 +260,11 @@ function VoiceTest({onWorked}: {onWorked: () => void}) {
         setHeard('');
         heardRef.current = '';
         setPhase('listening');
+        listening.current = true;
         voiceStart(getVoiceLang(), 'setup').then(() => {
             timer.current = window.setTimeout(() => void voiceStop(), 5000);
         }).catch((e) => {
+            listening.current = false;
             setError(String((e as Error)?.message ?? e));
             setPhase('failed');
         });

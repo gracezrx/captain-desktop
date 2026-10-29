@@ -86,6 +86,20 @@ describe('agents and orchestration (demo model)', () => {
         assert.equal(thread.at(-1)!.userId, agents.find((a) => a.handle === 'captain')!.userId, 'Captain posts the one answer');
     });
 
+    it('naming agents in your DM with Captain makes Captain work with just them', async () => {
+        const captain = agents.find((a) => a.handle === 'captain')!;
+        const dm = await owner.api.post(`/workspaces/${wsId}/dms`, {userId: captain.userId});
+        const p = await owner.api.post(`/channels/${dm.id}/posts`, {message: '@analyst @designer look at our signup funnel and suggest a better first screen'});
+        const run = await waitFor(async () => {
+            const runs: (Run & {id: string})[] = await owner.api.get(`/channels/${dm.id}/runs`);
+            return runs.find((r) => ['succeeded', 'failed'].includes(r.status));
+        }, 20_000, 'DM run');
+        assert.equal(run.kind, 'plan');
+        const handles = [...new Set(run.steps.map((st) => agents.find((a) => a.id === st.agentId)!.handle))].sort();
+        assert.deepEqual(handles, ['analyst', 'designer']);
+        assert.ok(p.id);
+    });
+
     it('a short request to several named agents still goes to each of them', async () => {
         const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@analyst @designer thoughts?'});
         const run = await runFor(owner.api, generalId, p.id);
