@@ -48,6 +48,11 @@ export async function usageSummary(db: Db, workspaceId: string, budgetUsd: numbe
         select agent_id, coalesce(sum(cost_usd), 0)::float8 as usd, count(*)::int as calls
         from usage_events where workspace_id = ${workspaceId} and created_at >= ${since}
         group by agent_id order by usd desc`;
+    // Failed model calls in the past week, newest first (what went wrong, and where).
+    const errors = await db`
+        select created_at, model_id, provider, purpose, agent_id, error
+        from usage_events where workspace_id = ${workspaceId} and not ok and created_at >= ${Date.now() - 7 * 86_400_000}
+        order by created_at desc limit 12`;
     const totalUsd = byModel.reduce((s, r) => s + Number(r.usd), 0);
     const calls = byModel.reduce((s, r) => s + Number(r.calls), 0);
     return {
@@ -57,5 +62,9 @@ export async function usageSummary(db: Db, workspaceId: string, budgetUsd: numbe
         calls,
         byModel: byModel.map((r) => ({modelId: r.modelId as string, usd: Number(r.usd), calls: Number(r.calls), tokensIn: Number(r.tokensIn), tokensOut: Number(r.tokensOut)})),
         byAgent: byAgent.map((r) => ({agentId: (r.agentId as string) ?? null, usd: Number(r.usd), calls: Number(r.calls)})),
+        recentErrors: errors.map((r) => ({
+            at: Number(r.createdAt), modelId: r.modelId as string, provider: r.provider as string, purpose: r.purpose as string,
+            agentId: (r.agentId as string) ?? null, error: String(r.error ?? '').slice(0, 300),
+        })),
     };
 }

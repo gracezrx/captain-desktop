@@ -4,12 +4,14 @@ import {AuthScreen, field, inviteFromUrl} from '../components/AuthScreen';
 import {api, errorMessage} from '../lib/api';
 import {endSession, resume, startSession, whenSignedOut} from '../lib/boot';
 import {onOpenChannel} from '../lib/native';
+import {onOpenSetup, setupSeen} from '../lib/setup';
 import {useStore} from '../lib/store';
 import {startTalkBridge} from '../lib/talk';
 
 import {ChatView} from './ChatView';
 import {BrowseChannels, NewChannel, NewMessage, SearchMessages} from './Dialogs';
 import {Settings} from './Settings';
+import {SetupGuide} from './SetupGuide';
 import {Sidebar, type SidebarAction} from './Sidebar';
 
 function clearInviteParam() {
@@ -45,7 +47,7 @@ export function App() {
     const workspace = useStore((s) => s.workspace);
     const activeChannelId = useStore((s) => s.activeChannelId);
     const setActive = useStore((s) => s.setActiveChannel);
-    const [dialog, setDialog] = useState<SidebarAction | null>(null);
+    const [dialog, setDialog] = useState<SidebarAction | 'setup' | null>(null);
 
     // Questions asked out loud through the floating talk button.
     useEffect(() => startTalkBridge(), []);
@@ -61,6 +63,16 @@ export function App() {
     }, []);
 
     useEffect(() => onOpenChannel((id) => setActive(id)), [setActive]);
+
+    // The setup guide: from the menu bar icon, Home or Settings, and once on
+    // its own the first time you're in.
+    useEffect(() => onOpenSetup(() => setDialog('setup')), []);
+    const inWorkspace = phase === 'ready' && ready && Boolean(workspace);
+    useEffect(() => {
+        if (inWorkspace && !setupSeen()) {
+            setDialog((d) => d ?? 'setup');
+        }
+    }, [inWorkspace]);
 
     if (phase === 'loading' || (phase === 'ready' && !ready)) {
         return (
@@ -97,6 +109,7 @@ export function App() {
             {(dialog === 'settings' || dialog === 'invite') && <Settings initial='people' onClose={() => setDialog(null)}/>}
             {dialog === 'models' && <Settings initial='models' onClose={() => setDialog(null)}/>}
             {dialog === 'new-workspace' && <CreateWorkspace onClose={() => setDialog(null)}/>}
+            {dialog === 'setup' && <SetupGuide onClose={() => setDialog(null)} onModels={() => setDialog('models')} onInvite={() => setDialog('invite')}/>}
             {dialog === 'search' && (
                 <SearchMessages
                     onClose={() => setDialog(null)}

@@ -97,6 +97,13 @@ export const config = {
         requestTimeoutMs: int('LLM_TIMEOUT_MS', 120_000),
         // Ask a cheap model to rate difficulty when the heuristics are unsure.
         llmClassifier: bool('ROUTER_LLM_CLASSIFIER', false),
+        // The longest answer a call may ask for. Without a cap, providers such as
+        // OpenRouter set aside credit for the model's maximum (often 32k+ tokens)
+        // and refuse the call when the balance can't cover it.
+        maxOutputTokens: int('LLM_MAX_OUTPUT_TOKENS', 4000),
+        // Model calls running at once per provider, per server. Several agents
+        // working in parallel queue here instead of tripping rate limits.
+        maxConcurrentPerProvider: int('LLM_MAX_CONCURRENT_PER_PROVIDER', 4),
     },
     agents: {
         maxParallelSteps: int('AGENT_MAX_PARALLEL', 3),

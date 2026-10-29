@@ -97,7 +97,7 @@ Every agent task is a **run**, and every run has **steps**. A plain reply is a r
 
 ```mermaid
 flowchart TD
-    T[Message mentions @captain] --> S[run.start]
+    T[Message mentions @captain,<br/>or two or more agents] --> S[run.start]
     S -->|Captain decides| P{direct or plan?}
     P -->|direct| ONE[one step: Captain replies]
     P -->|plan| CARD[insert steps · post plan card]
@@ -113,6 +113,7 @@ flowchart TD
 ```
 
 - **Planner** (`agents/planner.ts`): Captain answers in JSON, either `{"mode":"direct"}` or a list of steps with `dependsOn`. The plan is checked before it runs: known agents only, unique ids, dependencies that exist, and no cycles. If planning fails, Captain answers directly.
+- **Teams** (`agents/triggers.ts`): a message naming two or more agents starts one run led by Captain, with the named agents saved on the run (`runs.team`). Captain plans with only them, every one of them gets at least one step, and if planning fails each gets the request as a step of its own (`namedPlan`). Replies in the thread reuse the team. The plan card lists them (`coordinating`).
 - **Runner** (`agents/runner.ts`): calls the router and streams text to the chat as droppable `post_stream` events, at most every 120 ms. It runs tools and feeds their results back to the model. An *external* tool (email, `request_approval`) makes it stop, post a decision card, and return its transcript. The transcript is saved on the step, so the work picks up exactly where it stopped.
 - **Context** (`agents/history.ts`): the thread, the recent DM, or recent channel messages as background, plus images and text files. Agents read only what the person who asked can read.
 - **Jobs**: each phase is a durable job. If a server dies mid-step, its lease runs out and another server reruns the step. The half-written message is marked as interrupted.
@@ -124,8 +125,9 @@ flowchart TD
 1. **Tier.** Each call gets a tier: easy, balanced or hard. An agent's own tier is the floor (Analyst is "hard"), and "auto" lets the request decide. Heuristics in `llm/classify.ts` raise the tier for long or demanding requests. A cheap-model classifier is optional.
 2. **Candidates.** The router lists the tier's models by priority, then lower tiers, then higher ones. It keeps only models that can see images when images are attached, and that support tools when tools are offered. A model pinned on the agent goes first.
 3. **Routes.** Each model has provider routes in order: the vendor, then OpenRouter, then a gateway. A route is used only if its provider has a key. Keys come from Settings (`llm/keys.ts`: encrypted in `provider_keys`, reloaded on every instance through `NOTIFY captain_keys`) or else from the environment. A model and provider pair that fails 3 times is skipped for 2 minutes; changing a provider's key clears that.
-4. **Ledger.** Every attempt is written to `usage_events` with tokens, cost, latency and the run and step. If a workspace is over its monthly budget, the call is refused with a 402 before any model is called.
-5. **Demo.** With no key configured, a built-in demo model answers. It follows the same protocol, including streaming, tool calls and plan JSON.
+4. **Limits.** Every call asks for a bounded answer (`LLM_MAX_OUTPUT_TOKENS`, 4,000; plans 1,500). A "not enough credit" refusal (OpenRouter's 402, "can only afford N") is retried asking for less, and that provider's calls ask for no more for 10 minutes. A 429 waits (honoring `Retry-After`) and retries the same route; rate limits don't count against the breaker. Each provider gets at most `LLM_MAX_CONCURRENT_PER_PROVIDER` (4) calls at once on each instance.
+5. **Ledger.** Every attempt is written to `usage_events` with tokens, cost, latency and the run and step. If a workspace is over its monthly budget, the call is refused with a 402 before any model is called.
+6. **Demo.** With no key configured, a built-in demo model answers. It follows the same protocol, including streaming, tool calls and plan JSON.
 
 All providers are called with the OpenAI-compatible `/chat/completions` format and streaming server-sent events (`llm/client.ts`).
 

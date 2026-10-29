@@ -35,10 +35,12 @@ export type CallOptions = {
 export class LlmError extends Error {
     readonly status: number;
     readonly retryable: boolean;
+    readonly retryAfterMs: number | null; // from a rate limit's Retry-After
 
-    constructor(message: string, status = 0, retryable = true) {
+    constructor(message: string, status = 0, retryable = true, retryAfterMs: number | null = null) {
         super(message);
         this.status = status;
         this.retryable = retryable;
+        this.retryAfterMs = retryAfterMs;
     }
 }

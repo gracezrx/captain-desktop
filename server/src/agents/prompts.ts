@@ -41,7 +41,19 @@ export function roster(agents: AgentRow[]): string {
     return agents.map((a) => `- @${a.handle}: ${a.description || a.name}`).join('\n');
 }
 
-export function plannerSystem(captain: AgentRow, team: AgentRow[], s: Setting, maxSteps: number): string {
+export function plannerSystem(captain: AgentRow, team: AgentRow[], s: Setting, maxSteps: number, named = false): string {
+    if (named) {
+        return [
+            'ROLE: PLANNER',
+            `You are ${captain.name}, coordinating AI agents in a group chat. The person asked for these agents by name, so split the work between them:`,
+            roster(team),
+            `Context: ${where(s)} of "${s.workspaceName}". Today is ${today()}.`,
+            '',
+            'Reply with a JSON object only:',
+            `{"mode":"plan","goal":"one line","steps":[{"id":"s1","agent":"researcher","title":"Short title","instructions":"What to do and what to hand back","dependsOn":[]}]}`,
+            `Give every agent listed at least one step, use no one else, and use 1 to ${maxSteps} steps. A step with no dependencies runs at the same time as the others; a step sees the outputs of the steps it depends on, so make a step depend on another when it builds on that work. Keep each step focused on that agent's strength. You'll combine their results into one answer afterwards.`,
+        ].join('\n');
+    }
     return [
         'ROLE: PLANNER',
         `You are ${captain.name}, coordinating a team of AI agents in a group chat. Decide how to handle the latest request.`,

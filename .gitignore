@@ -8,5 +8,7 @@ desktop/src-tauri/gen/
 server/data/
 desktop/src-tauri/resources/server/*
 !desktop/src-tauri/resources/server/README.md
+desktop/src-tauri/resources/extension/*
+!desktop/src-tauri/resources/extension/README.md
 desktop/dist-extension/
 desktop/src-tauri/binaries/captain-voice-*

@@ -66,12 +66,23 @@ const ACTIVITY: Record<string, (args: Record<string, unknown>) => string> = {
     ask_agent: (a) => `Asking @${String(a.agent ?? 'a teammate').replace(/^@/, '')}`,
 };
 
+// The provider's own words, short: "(OpenRouter said: Rate limit exceeded)".
+function providerReason(message: string): string {
+    const last = message.replace(/^Every model we tried failed\. Last error: /, '');
+    const inner = last.match(/"message"\s*:\s*"([^"]{3,200})"/)?.[1] ?? last.replace(/^provider (answered \d+|error): /, '');
+    const short = inner.replace(/\s+/g, ' ').trim().slice(0, 160);
+    return short ? ` (The model provider said: ${short})` : '';
+}
+
 export function friendlyError(e: unknown): string {
     if (e instanceof AppError) {
         return e.message;
     }
     if (e instanceof LlmError) {
-        return e.status === 0 && /set up/.test(e.message) ? e.message : 'The AI models didn\'t respond properly. Try again in a minute.';
+        if ((e.status === 0 && /set up/.test(e.message)) || e.status === 402) {
+            return e.message;
+        }
+        return `The AI models didn't respond properly. Try again in a minute.${providerReason(e.message)}`;
     }
     return 'Something went wrong on our side. Try again.';
 }

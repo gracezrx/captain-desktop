@@ -1,4 +1,4 @@
-import {ArrowUp, Camera, FileText, Mic, Paperclip, X} from 'lucide-react';
+import {ArrowUp, Camera, FileText, Mic, Paperclip, Users, X} from 'lucide-react';
 import {type ReactNode, useCallback, useEffect, useMemo, useRef, useState} from 'react';
 
 import {errorMessage} from '../lib/api';
@@ -48,6 +48,27 @@ function useSuggestions(query: string | null): Suggestion[] {
     }, [agents, users, meId, query]);
 }
 
+// Two or more agents named outside a direct message: Captain coordinates
+// them (the same rule as the server's triggers).
+function useTeamHint(text: string, channelId: string | null): string | null {
+    const agents = useStore((s) => s.agents);
+    const direct = useStore((s) => (channelId ? s.channels[channelId]?.type === 'D' : false));
+    return useMemo(() => {
+        if (direct || !text.includes('@')) {
+            return null;
+        }
+        const handles = new Set([...text.matchAll(/(?:^|[^\w@.])@([a-z0-9][a-z0-9._-]{0,40})/gi)].map((m) => m[1].toLowerCase().replace(/[._-]+$/, '')));
+        const named = Object.values(agents).filter((a) => a.enabled && handles.has(a.handle.toLowerCase()));
+        const team = named.filter((a) => !a.isCoordinator);
+        if (named.length < 2 || !team.length || !Object.values(agents).some((a) => a.isCoordinator && a.enabled)) {
+            return null;
+        }
+        const names = team.map((a) => `@${a.handle}`);
+        const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+        return team.length === 1 ? `Captain will work with ${list} and post one answer.` : `Captain will split this between ${list} and post one combined answer.`;
+    }, [agents, direct, text]);
+}
+
 export function Composer({channelId, rootId = null, variant, placeholder, autoFocus, leading, draftKey, onSent, incoming}: Props) {
     const storageKey = draftKey ? `captain.draft.${draftKey}` : null;
     const [text, setText] = useState(() => (storageKey ? localStorage.getItem(storageKey) ?? '' : ''));
@@ -65,6 +86,7 @@ export function Composer({channelId, rootId = null, variant, placeholder, autoFo
     const [pick, setPick] = useState(0);
     const suggestions = useSuggestions(mention?.query ?? null);
     const users = useStore((s) => s.users);
+    const teamHint = useTeamHint(text, channelId);
 
     const dictation = useDictation(useCallback(() => textRef.current, []), useCallback((t: string) => setText(t), []));
 
@@ -283,6 +305,11 @@ export function Composer({channelId, rootId = null, variant, placeholder, autoFo
                         </div>
                     ))}
                 </div>
+            )}
+            {teamHint && (
+                <p className='mb-1 flex items-center gap-1.5 px-1.5 text-[12px] font-semibold text-accent-text'>
+                    <Users size={13} className='shrink-0'/> {teamHint}
+                </p>
             )}
             <textarea
                 ref={area}

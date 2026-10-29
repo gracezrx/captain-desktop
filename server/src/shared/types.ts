@@ -77,6 +77,7 @@ export type PlanCard = {
     status: RunStatus;
     goal: string;
     steps: {id: string; title: string; agentId: ID; status: PlanStepStatus; postId: ID | null; dependsOn: string[]}[];
+    coordinating?: ID[]; // the agents the person named; Captain split the work between them
 };
 
 export type DecisionCard = {
@@ -181,6 +182,7 @@ export type UsageSummary = {
     calls: number;
     byModel: {modelId: string; usd: number; calls: number; tokensIn: number; tokensOut: number}[];
     byAgent: {agentId: ID | null; usd: number; calls: number}[];
+    recentErrors: {at: Ms; modelId: string; provider: string; purpose: string; agentId: ID | null; error: string}[]; // failed model calls, past week
 };
 
 export type RunStep = {

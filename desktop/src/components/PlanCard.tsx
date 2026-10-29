@@ -29,6 +29,10 @@ function StepIcon({status}: {status: PlanStepStatus}) {
     }
 }
 
+function joinNames(names: string[]): string {
+    return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
 // Captain's plan: who does what, in which order, live.
 export function PlanCard({post, compact = false, onOpenStep}: {post: Post; compact?: boolean; onOpenStep?: (postId: string) => void}) {
     const plan = post.props.plan;
@@ -73,6 +77,11 @@ export function PlanCard({post, compact = false, onOpenStep}: {post: Post; compa
                     </button>
                 )}
             </div>
+            {plan.coordinating && plan.coordinating.length > 0 && (
+                <p className='mt-1 text-[12px] text-muted'>
+                    Captain is coordinating {joinNames(plan.coordinating.map((id) => `@${agents[id]?.handle ?? 'agent'}`))}: each takes a part, then Captain posts one combined answer.
+                </p>
+            )}
             <div className='mt-2.5 h-1 overflow-hidden rounded-full bg-tint'>
                 <div className='h-full rounded-full bg-accent transition-all duration-500' style={{width: `${(done / Math.max(1, plan.steps.length)) * 100}%`}}/>
             </div>

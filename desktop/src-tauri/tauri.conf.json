@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run build:voice && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build && npm run bundle:server && npm run build:voice",
+    "beforeBuildCommand": "npm run build && npm run bundle:extension && npm run bundle:server && npm run build:voice",
     "frontendDist": "../dist"
   },
   "app": {
@@ -86,7 +86,8 @@
       "entitlements": "Entitlements.plist"
     },
     "resources": {
-      "resources/server": "server"
+      "resources/server": "server",
+      "resources/extension": "extension"
     },
     "externalBin": [
       "binaries/captain-voice"

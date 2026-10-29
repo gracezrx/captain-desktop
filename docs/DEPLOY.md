@@ -139,7 +139,8 @@ The app carries the server and runs it with the Mac's Node.js (22 or newer), on 
 
 ### Voice and shortcuts
 
-- **Shortcuts:** ⌘⇧Space opens the panel to write. ⌃⇧Space talks to Captain: hold it while you talk, or tap it, talk, and tap again to send. Change either one in Settings → This Mac. macOS 15 and later refuses global shortcuts made only of ⌥ (or ⌥⇧) plus a key, and Settings says when macOS refuses one.
+- **Shortcuts:** ⌃⇧C opens the panel to write. ⌃⇧Space talks to Captain: hold it while you talk, or tap it, talk, and tap again to send. Change either one in Settings → This Mac or the setup guide. If another app already uses the keys (Lock In uses ⌘⇧Space), or they're made only of ⌥ (macOS 15 refuses those), Settings says the shortcut isn't working.
+- **Setup guide:** opens after your first sign-in, and any time from the menu bar icon → **Get started…**, Home, or Settings → This Mac. Each step has a quick test: Captain says back what it heard, sends a test banner, and shows a test snapshot.
 - **The talk button:** a small face that floats above other windows. Hold it to talk, tap it for hands-free, drag it anywhere. Right-click it to switch between English and Chinese, turn spoken answers off, or hide it. The menu bar menu brings it back.
 - **How voice works:** the app carries a small helper, `captain-voice` (`src-tauri/voice/main.swift`). It uses Apple's speech recognition, on the Mac itself when the language allows, and Apple's voices to read answers aloud. macOS asks once for Microphone and Speech Recognition. Download better voices in System Settings → Accessibility → Spoken Content → System voice → Manage Voices.
 - Building the app yourself needs Xcode's command-line tools for the helper (`npm run build:voice`, run automatically by `tauri build`).
@@ -178,7 +179,7 @@ Then run the workflow again. The run's summary says which signing it used. Witho
 
 ## The Chrome extension
 
-Install: unzip `Captain-Chrome-extension.zip`, open `chrome://extensions`, turn on **Developer mode**, and choose **Load unpacked**. To build it: `cd desktop && npm run build:extension` (output in `desktop/dist-extension`).
+Install from the Mac app: setup guide → **The Chrome extension** → **Show the extension in Finder**, then in `chrome://extensions` turn on **Developer mode**, click **Load unpacked**, and choose that folder. Or unzip `Captain-Chrome-extension.zip` from the release and load that folder instead. To build it: `cd desktop && npm run build:extension` (output in `desktop/dist-extension`).
 
 - **Toolbar button (or ⌥⇧C):** a popup to write to any chat, see what needs you, and approve or reject decisions. The panel button opens the same view in Chrome's side panel, which stays open next to the page and shows each conversation.
 - **This page, Selection, Let agents read it:** add a link, a quote, or the page's text as a file agents read. Pages are read only when you click.

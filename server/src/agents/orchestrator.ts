@@ -40,6 +40,7 @@ import {agentSystem, type Setting, stepSystem, synthesisSystem} from './prompts.
 import {CancelledError, friendlyError, runAgent, type RunnerOutcome, type StepState} from './runner.js';
 import {chooseTier} from './tiering.js';
 import {toolsFor} from './tools/index.js';
+import {mentionedHandles} from './triggers.js';
 
 type RunPayload = {runId: string};
 type StepPayload = {runId: string; stepId: string};
@@ -98,6 +99,8 @@ export class Orchestrator {
             const steps = await listSteps(this.ctx.sql, run.id);
             const plan: PlanCard = {
                 runId: run.id, status: run.status, goal: run.goal,
+                // The agents you named: Captain splits the work between just them.
+                ...(run.team?.length ? {coordinating: run.team} : {}),
                 steps: steps.map((s) => ({id: s.id, title: s.title, agentId: s.agentId, status: s.status, postId: s.postId, dependsOn: s.dependsOn})),
             };
             const row = await mergePostProps(this.ctx.sql, run.cardPostId, {plan});
@@ -167,8 +170,12 @@ export class Orchestrator {
             const stop = this.watch(runId, ctrl);
             try {
                 const convo = await conversation(this.ctx, channel, trigger, captain.userId);
+                // Agents named in the message: Captain coordinates just them.
+                const everyone = await listAgents(this.ctx.sql, run.workspaceId);
+                const team = run.team?.length ? everyone.filter((a) => run.team!.includes(a.id) && a.enabled) : everyone;
+                const named = Boolean(run.team?.length) && mentionedHandles(trigger.message).some((h) => team.some((a) => a.handle.toLowerCase() === h));
                 const plan = await makePlan(this.ctx, {
-                    captain, team: await listAgents(this.ctx.sql, run.workspaceId), setting: await this.setting(run, requester),
+                    captain, team, named, setting: await this.setting(run, requester),
                     conversation: withoutImageData(convo.messages), text: convo.text, workspaceId: run.workspaceId, runId, requesterId: requester.id, signal: ctrl.signal,
                 });
                 if (ctrl.signal.aborted) {
@@ -190,7 +197,7 @@ export class Orchestrator {
                     }
                     const card = await savePost(this.ctx, (await getUser(this.ctx.sql, captain.userId))!, channel, {
                         message: `Plan: ${plan.goal}`, rootId: run.rootPostId, type: 'plan',
-                        props: {plan: {runId, status: 'running', goal: plan.goal, steps: plan.steps.map((s) => ({id: s.id, title: s.title, agentId: s.agentId, status: 'pending' as const, postId: null, dependsOn: s.dependsOn}))}},
+                        props: {plan: {runId, status: 'running', goal: plan.goal, ...(run.team?.length ? {coordinating: run.team} : {}), steps: plan.steps.map((s) => ({id: s.id, title: s.title, agentId: s.agentId, status: 'pending' as const, postId: null, dependsOn: s.dependsOn}))}},
                     });
                     run = await updateRun(this.ctx.sql, runId, {cardPostId: card.id});
                     await this.publishRun(run);

@@ -71,6 +71,29 @@ describe('agents and orchestration (demo model)', () => {
         assert.ok(detail.steps.every((x) => x.output));
     });
 
+    it('naming several agents gets one coordinated run: Captain splits the work between just them', async () => {
+        const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@researcher @writer research our competitors and draft a launch note'});
+        const run = await runFor(owner.api, generalId, p.id);
+        assert.equal(run.status, 'succeeded');
+        assert.equal(run.kind, 'plan');
+        const runs: Run[] = await owner.api.get(`/channels/${generalId}/runs`);
+        assert.equal(runs.filter((r) => r.rootPostId === p.id).length, 1, 'one run, not one per agent');
+        const byId = (id: string) => agents.find((a) => a.id === id)!.handle;
+        assert.deepEqual([...new Set(run.steps.map((st) => byId(st.agentId)))].sort(), ['researcher', 'writer']);
+        const thread: Post[] = await owner.api.get(`/posts/${p.id}/thread`);
+        const card = thread.find((x) => x.type === 'plan')!;
+        assert.deepEqual(card.props.plan.coordinating.map(byId).sort(), ['researcher', 'writer']);
+        assert.equal(thread.at(-1)!.userId, agents.find((a) => a.handle === 'captain')!.userId, 'Captain posts the one answer');
+    });
+
+    it('a short request to several named agents still goes to each of them', async () => {
+        const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@analyst @designer thoughts?'});
+        const run = await runFor(owner.api, generalId, p.id);
+        assert.equal(run.kind, 'plan');
+        const handles = run.steps.map((st) => agents.find((a) => a.id === st.agentId)!.handle).sort();
+        assert.deepEqual(handles, ['analyst', 'designer']);
+    });
+
     it('small talk to @captain is answered directly, without a plan', async () => {
         const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@captain hello!'});
         const run = await runFor(owner.api, generalId, p.id);

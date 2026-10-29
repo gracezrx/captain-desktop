@@ -5,8 +5,10 @@ import {useEffect, useMemo, useState} from 'react';
 
 import {Avatar, PORTRAITS, portraitSrc} from '../components/Avatar';
 import {FieldLabel, ghostBtn, input, Modal, primaryBtn} from '../components/Modal';
+import {ShortcutRow} from '../components/ShortcutRow';
 import {api, errorMessage} from '../lib/api';
-import {isTauri, localServerRestart, localServerStatus, type LocalServerStatus, prettyKeys, setTalkButtonVisible, shortcutSet, shortcutsGet, type ShortcutStatus, talkButtonVisible} from '../lib/native';
+import {isTauri, localServerRestart, localServerStatus, type LocalServerStatus, setTalkButtonVisible, shortcutsGet, type ShortcutStatus, talkButtonVisible} from '../lib/native';
+import {openSetup} from '../lib/setup';
 import {displayName, modelLabel, useStore} from '../lib/store';
 import type {Agent, AgentTool, ModelInfo, ProviderCheck, ProviderKeyInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
 
@@ -406,6 +408,22 @@ function Models({admin}: {admin: boolean}) {
                             By agent: {usage.byAgent.map((a) => `${a.agentId ? agents[a.agentId]?.name ?? 'removed agent' : 'other'} $${a.usd.toFixed(3)}`).join(' · ')}
                         </p>
                     )}
+                    {(usage.recentErrors?.length ?? 0) > 0 && (
+                        <details className='mt-3 rounded-xl bg-tint/60 px-3 py-2 ring-1 ring-line'>
+                            <summary className='cursor-pointer text-[12.5px] font-bold text-ink'>
+                                Recent model errors ({usage.recentErrors.length}) <span className='font-normal text-muted'>· past week; Captain retries and falls back, so most of these didn't reach you</span>
+                            </summary>
+                            <ul className='mt-2 space-y-1.5'>
+                                {usage.recentErrors.map((e, i) => (
+                                    <li key={`${e.at}-${i}`} className='text-[12px] leading-snug'>
+                                        <span className='font-semibold text-ink'>{modelLabel(models, e.modelId)}</span>
+                                        <span className='text-muted'> · {e.provider} · {e.agentId ? agents[e.agentId]?.name ?? 'agent' : e.purpose} · {new Date(e.at).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'})}</span>
+                                        <div className='break-words text-text'>{e.error}</div>
+                                    </li>
+                                ))}
+                            </ul>
+                        </details>
+                    )}
                 </section>
             )}
             <section>
@@ -626,9 +644,16 @@ function ThisMacSettings() {
 
     return (
         <div className='space-y-6'>
+            <section className='flex items-center gap-3 rounded-2xl bg-bg-subtle p-3 ring-1 ring-line/70'>
+                <span className='min-w-0 flex-1'>
+                    <span className='block text-[13px] font-bold text-ink'>Setup guide</span>
+                    <span className='block text-[12px] text-muted'>Server, model key, mic, banners, screen snapshots, shortcuts and the Chrome extension, each with a quick test.</span>
+                </span>
+                <button type='button' className={primaryBtn} onClick={openSetup}>Open</button>
+            </section>
             <section>
                 <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Keyboard shortcuts</h3>
-                <p className='mb-3 text-[12.5px] text-muted'>They work in any app. macOS 15 and later only allows shortcuts that include ⌘ or ⌃.</p>
+                <p className='mb-3 text-[12.5px] text-muted'>They work in any app. If another app already uses the keys (Lock In uses ⌘⇧Space), pick others. macOS 15 and later only allows shortcuts that include ⌘ or ⌃.</p>
                 {keys && (
                     <div className='space-y-2'>
                         <ShortcutRow kind='panel' label='Write to a chat' hint='Opens the panel from the menu bar' status={keys.panel} onChange={(st) => setKeys({...keys, panel: st})}/>
@@ -663,67 +688,6 @@ function ThisMacSettings() {
                     </div>
                 </section>
             )}
-        </div>
-    );
-}
-
-// Keys a shortcut can use: letters, digits, Space, F-keys and a few marks.
-function acceleratorFrom(e: KeyboardEvent): string | null {
-    const mods = [e.metaKey && 'Command', e.ctrlKey && 'Control', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean) as string[];
-    const code = e.code;
-    if (!mods.length || /^(Meta|Control|Alt|Shift)(Left|Right)$/.test(code) || !code) {
-        return null;
-    }
-    return [...mods, code].join('+');
-}
-
-function ShortcutRow({kind, label, hint, status, onChange}: {kind: 'panel' | 'talk'; label: string; hint: string; status: ShortcutStatus; onChange: (s: ShortcutStatus) => void}) {
-    const [recording, setRecording] = useState(false);
-    const [error, setError] = useState<string | null>(status.ok ? null : status.error);
-
-    useEffect(() => {
-        if (!recording) {
-            return undefined;
-        }
-        const onKey = (e: KeyboardEvent) => {
-            e.preventDefault();
-            e.stopPropagation();
-            if (e.key === 'Escape') {
-                setRecording(false);
-                return;
-            }
-            const keys = acceleratorFrom(e);
-            if (!keys) {
-                return; // still holding modifiers
-            }
-            setRecording(false);
-            void shortcutSet(kind, keys).then((st) => {
-                if (st.ok) {
-                    onChange(st);
-                    setError(null);
-                } else {
-                    setError(`${prettyKeys(keys)}: ${st.error}`);
-                }
-            });
-        };
-        window.addEventListener('keydown', onKey, true);
-        return () => window.removeEventListener('keydown', onKey, true);
-    }, [recording, kind, onChange]);
-
-    return (
-        <div className='rounded-xl bg-bg-subtle px-3 py-2.5 ring-1 ring-line/70'>
-            <div className='flex items-center gap-3'>
-                <div className='min-w-0 flex-1'>
-                    <div className='text-[13px] font-bold text-ink'>{label}</div>
-                    <div className='text-[12px] text-muted'>{hint}</div>
-                </div>
-                <kbd className={`rounded-lg px-2 py-1 font-sans text-[13px] font-bold ring-1 ${status.ok ? 'bg-surface text-ink ring-line' : 'bg-surface text-alert ring-alert/40'}`}>
-                    {recording ? 'Press keys…' : prettyKeys(status.keys)}
-                </kbd>
-                <button type='button' className={ghostBtn} onClick={() => setRecording(!recording)}>{recording ? 'Cancel' : 'Change'}</button>
-            </div>
-            {!status.ok && !error && <p className='mt-1.5 text-[12px] text-alert'>This shortcut isn&apos;t working: macOS didn&apos;t allow it. Pick another.</p>}
-            {error && <p className='mt-1.5 text-[12px] text-alert'>{error}</p>}
         </div>
     );
 }

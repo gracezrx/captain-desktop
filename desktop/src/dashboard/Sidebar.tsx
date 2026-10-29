@@ -1,4 +1,4 @@
-import {Check, ChevronDown, Command, LogOut, Plus, Search, Settings as Gear, TextSearch} from 'lucide-react';
+import {Check, ChevronDown, Keyboard, LogOut, Plus, Search, Settings as Gear, TextSearch} from 'lucide-react';
 import {useMemo, useState} from 'react';
 
 import {Avatar, portraitSrc} from '../components/Avatar';
@@ -192,7 +192,7 @@ export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction:
                 <div className='min-w-0 flex-1'>
                     <div className='truncate text-[13px] font-bold text-nav-text'>{displayName(me ?? undefined)}</div>
                     <div className='flex items-center gap-1 truncate text-[11px] whitespace-nowrap text-nav-muted'>
-                        {connection === 'offline' ? 'Reconnecting…' : connection === 'connecting' ? 'Connecting…' : isTauri ? <><Command size={11}/> {keys.panel}: quick panel</> : 'Online'}
+                        {connection === 'offline' ? 'Reconnecting…' : connection === 'connecting' ? 'Connecting…' : isTauri ? <><Keyboard size={11}/> {keys.panel}: quick panel</> : 'Online'}
                     </div>
                 </div>
                 <button type='button' onClick={() => onAction('settings')} aria-label='Settings' title='Settings' className='grid size-8 place-items-center rounded-full text-nav-muted hover:bg-white/70 hover:text-nav-text dark:hover:bg-white/10'>

@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "dev:server": "npm --prefix ../server run dev",
     "bundle:server": "node scripts/bundle-server.mjs",
+    "bundle:extension": "node scripts/bundle-extension.mjs",
     "build:extension": "tsc --noEmit && vite build --config vite.extension.config.ts",
     "build:voice": "node scripts/build-voice.mjs"
   },

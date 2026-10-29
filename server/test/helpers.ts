@@ -138,8 +138,8 @@ export async function socket(base: string, token: string, extra: {connectionId?:
 
 // ------------------------------------------------------------ fake model provider
 
-export type Scripted = {text?: string; toolCalls?: {name: string; args: Record<string, unknown>}[]; status?: number; delayMs?: number};
-export type FakeRequest = {model: string; messages: {role: string; content: unknown; tool_calls?: unknown}[]; tools?: {function: {name: string}}[]; stream?: boolean; auth?: string};
+export type Scripted = {text?: string; toolCalls?: {name: string; args: Record<string, unknown>}[]; status?: number; delayMs?: number; errorMessage?: string};
+export type FakeRequest = {model: string; messages: {role: string; content: unknown; tool_calls?: unknown}[]; tools?: {function: {name: string}}[]; stream?: boolean; auth?: string; max_tokens?: number};
 
 export async function fakeProvider(script: (req: FakeRequest) => Scripted): Promise<{url: string; requests: FakeRequest[]; close: () => Promise<void>}> {
     const requests: FakeRequest[] = [];
@@ -155,7 +155,7 @@ export async function fakeProvider(script: (req: FakeRequest) => Scripted): Prom
             }
             if (s.status && s.status !== 200) {
                 res.writeHead(s.status, {'Content-Type': 'application/json'});
-                res.end(JSON.stringify({error: {message: 'scripted failure'}}));
+                res.end(JSON.stringify({error: {message: s.errorMessage ?? 'scripted failure', code: s.status}}));
                 return;
             }
             res.writeHead(200, {'Content-Type': 'text/event-stream'});

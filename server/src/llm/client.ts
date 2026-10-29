@@ -44,8 +44,9 @@ export async function chatCompletion(ep: Endpoint, opts: CallOptions): Promise<C
     }
     if (!res.ok) {
         const detail = (await res.text().catch(() => '')).slice(0, 400);
+        const retryAfter = Number(res.headers.get('retry-after'));
         // 4xx other than rate limits means this request won't work on this model.
-        throw new LlmError(`provider answered ${res.status}: ${detail}`, res.status, res.status === 429 || res.status >= 500 || res.status === 408);
+        throw new LlmError(`provider answered ${res.status}: ${detail}`, res.status, res.status === 429 || res.status >= 500 || res.status === 408, Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : null);
     }
 
     const type = res.headers.get('content-type') ?? '';
@@ -91,14 +92,16 @@ export async function chatCompletion(ep: Endpoint, opts: CallOptions): Promise<C
                 if (data === '[DONE]') {
                     continue;
                 }
-                let chunk: {choices?: {delta?: {content?: string; tool_calls?: {index?: number; id?: string; function?: {name?: string; arguments?: string}}[]}; finish_reason?: string | null}[]; usage?: typeof usage; error?: {message?: string}};
+                let chunk: {choices?: {delta?: {content?: string; tool_calls?: {index?: number; id?: string; function?: {name?: string; arguments?: string}}[]}; finish_reason?: string | null}[]; usage?: typeof usage; error?: {message?: string; code?: number | string}};
                 try {
                     chunk = JSON.parse(data);
                 } catch {
                     continue;
                 }
                 if (chunk.error) {
-                    throw new LlmError(`provider error: ${chunk.error.message ?? 'unknown'}`, 0, true);
+                    // Errors can arrive mid-stream (OpenRouter sends its status as the code).
+                    const code = Number(chunk.error.code);
+                    throw new LlmError(`provider error: ${chunk.error.message ?? 'unknown'}`, Number.isInteger(code) && code >= 400 && code < 600 ? code : 0, true);
                 }
                 if (chunk.usage) {
                     usage = chunk.usage;

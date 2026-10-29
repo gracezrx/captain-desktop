@@ -399,7 +399,7 @@ export async function shortcutSet(kind: 'panel' | 'talk', keys: string): Promise
     return invoke('shortcut_set', {kind, keys});
 }
 
-// "Command+Shift+Space" → "⌘⇧Space"
+// "Control+Shift+KeyC" → "⌃⇧C"
 export function prettyKeys(keys: string): string {
     const symbols: Record<string, string> = {command: '⌘', cmd: '⌘', super: '⌘', commandorcontrol: '⌘', control: '⌃', ctrl: '⌃', alt: '⌥', option: '⌥', shift: '⇧'};
     const order = ['⌃', '⌥', '⇧', '⌘'];
@@ -416,3 +416,41 @@ export async function talkButtonVisible(): Promise<boolean> {
 export async function setTalkButtonVisible(visible: boolean): Promise<void> {
     await invoke('orb_set_visible', {visible});
 }
+
+// ------------------------------------------------------------ links and the extension
+
+// The Mac app's web views don't open links in a new window on their own, so
+// web links go to the default browser.
+export async function openExternal(url: string): Promise<void> {
+    if (isTauri) {
+        await invoke('open_url', {url});
+    } else {
+        window.open(url, '_blank', 'noopener');
+    }
+}
+
+export function openLinksInBrowser(): void {
+    if (!isTauri) {
+        return;
+    }
+    document.addEventListener('click', (e) => {
+        const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+        if (!a || e.defaultPrevented) {
+            return;
+        }
+        const url = new URL(a.href, location.href);
+        const external = /^(https?|mailto):$/.test(url.protocol) && (a.target === '_blank' || url.origin !== location.origin);
+        if (external) {
+            e.preventDefault();
+            void openExternal(url.toString()).catch((err) => console.warn('open link failed', err));
+        }
+    });
+}
+
+// Copies the Chrome extension the app carries to a folder Chrome can load and
+// shows it in Finder. Returns the folder.
+export async function revealChromeExtension(): Promise<string> {
+    return invoke<string>('chrome_extension_reveal');
+}
+
+export const RELEASE_PAGE = 'https://github.com/gracezrx/captain-desktop/releases/tag/app-latest';

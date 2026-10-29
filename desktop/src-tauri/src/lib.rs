@@ -134,6 +134,54 @@ fn open_dashboard(app: AppHandle) {
     show_dashboard(&app);
 }
 
+// ------------------------------------------------------------ Chrome extension
+//
+// The app carries the Chrome extension (resources/extension). Chrome loads an
+// unpacked extension from a folder it can keep reading, so this copies it to
+// the app's data folder and shows it in Finder.
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Open a web link in the default browser.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:")) {
+        return Err("Only web and email links open from Captain.".into());
+    }
+    #[cfg(target_os = "macos")]
+    Command::new("/usr/bin/open").arg(&url).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn chrome_extension_reveal(app: AppHandle) -> Result<String, String> {
+    let from = app.path().resource_dir().map_err(|e| e.to_string())?.join("extension");
+    if !from.join("manifest.json").exists() {
+        return Err("This copy of Captain doesn't include the Chrome extension. Download Captain-Chrome-extension.zip from the release page instead.".into());
+    }
+    let to = app.path().app_data_dir().map_err(|e| e.to_string())?.join("Chrome extension");
+    let _ = std::fs::remove_dir_all(&to);
+    copy_dir(&from, &to).map_err(|e| format!("Couldn't copy the extension: {e}"))?;
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg("-R").arg(&to).spawn();
+    }
+    Ok(to.to_string_lossy().into_owned())
+}
+
 // ------------------------------------------------------------ badge
 
 /// The number of things waiting for you, shown next to the menu bar icon.
@@ -550,17 +598,26 @@ fn local_server_forget(app: AppHandle) -> Result<(), String> {
 struct Settings {
     panel_shortcut: String,
     talk_shortcut: String,
+    /// Set once the person picks their own keys; until then the shortcuts
+    /// follow the app's defaults (which can change between versions).
+    panel_custom: bool,
+    talk_custom: bool,
     orb_visible: bool,
     orb_position: Option<(i32, i32)>,
 }
 
+const PANEL_SHORTCUT: &str = "Control+Shift+C";
+const TALK_SHORTCUT: &str = "Control+Shift+Space";
+
 impl Default for Settings {
     fn default() -> Self {
         // macOS 15 refuses global shortcuts made only of ⌥ (or ⌥⇧) and a key,
-        // so these use ⌘ and ⌃.
+        // so these use ⌃. (⌘⇧Space is taken by other menu bar apps.)
         Self {
-            panel_shortcut: "Command+Shift+Space".into(),
-            talk_shortcut: "Control+Shift+Space".into(),
+            panel_shortcut: PANEL_SHORTCUT.into(),
+            talk_shortcut: TALK_SHORTCUT.into(),
+            panel_custom: false,
+            talk_custom: false,
             orb_visible: true,
             orb_position: None,
         }
@@ -572,10 +629,18 @@ fn settings_path(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn load_settings(app: &AppHandle) -> Settings {
-    settings_path(app)
+    let mut settings: Settings = settings_path(app)
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Keys nobody picked follow the current defaults.
+    if !settings.panel_custom {
+        settings.panel_shortcut = PANEL_SHORTCUT.into();
+    }
+    if !settings.talk_custom {
+        settings.talk_shortcut = TALK_SHORTCUT.into();
+    }
+    settings
 }
 
 fn save_settings(app: &AppHandle) {
@@ -677,8 +742,10 @@ fn shortcut_set(app: AppHandle, kind: String, keys: String) -> ShortcutStatus {
         {
             let mut settings = app.state::<Mutex<Settings>>().inner().lock().unwrap();
             if kind == "talk" {
+                settings.talk_custom = keys != TALK_SHORTCUT;
                 settings.talk_shortcut = keys;
             } else {
+                settings.panel_custom = keys != PANEL_SHORTCUT;
                 settings.panel_shortcut = keys;
             }
         }
@@ -955,6 +1022,8 @@ pub fn run() {
             local_server_forget,
             shortcuts_get,
             shortcut_set,
+            chrome_extension_reveal,
+            open_url,
             voice_start,
             voice_stop,
             voice_cancel,
@@ -996,6 +1065,7 @@ pub fn run() {
                     &MenuItem::with_id(app, "write", "New message", true, None::<&str>)?,
                     &MenuItem::with_id(app, "inbox", "Inbox", true, None::<&str>)?,
                     &MenuItem::with_id(app, "open", "Open Captain", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "setup", "Get started…", true, None::<&str>)?,
                     &MenuItem::with_id(app, "orb-show", "Show the talk button", true, None::<&str>)?,
                     &MenuItem::with_id(app, "restart-server", "Restart Captain on this Mac", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
@@ -1012,6 +1082,10 @@ pub fn run() {
                     "write" => open_panel(app, PanelTarget::mode("compose")),
                     "inbox" => open_panel(app, PanelTarget::mode("inbox")),
                     "open" => show_dashboard(app),
+                    "setup" => {
+                        show_dashboard(app);
+                        let _ = app.emit_to("main", "open-setup", ());
+                    }
                     "orb-show" => set_orb_visible(app, true),
                     "restart-server" => {
                         stop_local(app);
