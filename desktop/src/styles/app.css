@@ -31,6 +31,7 @@
   --line: #e8edf5;
   --accent: #3a6fd8;
   --accent-text: #2a56b8;
+  --chart-bar: #3a6fd8; /* checked with the dataviz palette validator against --surface */
   --on-accent: #ffffff;
   --tint: #eef3fd;
   --focus: #3a6fd8;
@@ -78,6 +79,7 @@
     --line: #2e394c;
     --accent: #7fa6ff;
     --accent-text: #a9c3ff;
+    --chart-bar: #5f8cf0;
     --on-accent: #0f1a3d;
     --tint: #243149;
     --focus: #7fa6ff;

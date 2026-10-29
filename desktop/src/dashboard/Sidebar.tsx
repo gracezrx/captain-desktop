@@ -1,4 +1,4 @@
-import {Check, ChevronDown, Keyboard, LogOut, Plus, Search, Settings as Gear, TextSearch} from 'lucide-react';
+import {Check, ChevronDown, Keyboard, LayoutDashboard, LogOut, Plus, Search, Settings as Gear, TextSearch} from 'lucide-react';
 import {useMemo, useState} from 'react';
 
 import {Avatar, portraitSrc} from '../components/Avatar';
@@ -113,6 +113,15 @@ export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction:
             </div>
 
             <nav className='scroll-quiet min-h-0 flex-1 overflow-y-auto px-2 pb-3'>
+                <button
+                    type='button'
+                    onClick={() => setActive(null)}
+                    className={`mb-1 flex h-10 w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors ${active === null ? 'bg-[var(--active-chat)] ring-1 ring-nav-line' : 'hover:bg-white/60 dark:hover:bg-white/5'}`}
+                    style={active === null ? {boxShadow: 'var(--shadow-control)'} : undefined}
+                >
+                    <span className='grid size-[26px] shrink-0 place-items-center rounded-lg bg-white text-accent-text ring-1 ring-line dark:bg-white/10'><LayoutDashboard size={15}/></span>
+                    <span className={`min-w-0 flex-1 truncate text-[13.5px] ${active === null ? 'font-bold text-nav-text' : 'font-medium text-nav-muted'}`}>Home</span>
+                </button>
                 {waiting.length > 0 && !q && (
                     <section className='mb-2'>
                         <h2 className='flex items-center gap-1.5 px-2.5 pt-2 pb-1 text-[11.5px] font-bold text-gold-text'>

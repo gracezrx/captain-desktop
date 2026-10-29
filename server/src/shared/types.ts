@@ -175,6 +175,35 @@ export type ProviderKeyInfo = {
 
 export type ProviderCheck = {ok: boolean; message: string; modelId?: string; latencyMs?: number};
 
+// The Home dashboard: what agents are working on, what finished, and (for
+// admins) how many tokens were burned.
+export type ActivityRun = Run & {
+    agentId: ID; // who leads it (Captain for a plan or a team)
+    requestedBy: ID;
+    team: ID[] | null; // agents named in the message, when Captain coordinates them
+    triggerPostId: ID | null;
+    tokens: number; // tokens in + out so far
+};
+
+export type TokenTotals = {tokensIn: number; tokensOut: number; usd: number; calls: number};
+
+export type DashboardUsage = {
+    today: TokenTotals; // your local day
+    week: TokenTotals; // the past 7 days, today included
+    month: TokenTotals; // the budget month (from the 1st, UTC)
+    budgetUsd: number | null;
+    daily: {day: Ms; tokens: number; usd: number}[]; // past 14 local days, oldest first; day = local midnight
+    byAgent: {agentId: ID | null; tokens: number; usd: number}[]; // this month
+    errorsToday: number; // failed model calls (Captain retries most of them)
+};
+
+export type Dashboard = {
+    active: ActivityRun[]; // planning, working or waiting for a decision
+    recent: ActivityRun[]; // finished in the past 7 days, newest first
+    counts: {active: number; waiting: number; doneToday: number; failedToday: number; doneWeek: number};
+    usage: DashboardUsage | null; // owners and admins only
+};
+
 export type UsageSummary = {
     periodStart: Ms;
     totalUsd: number;

@@ -156,6 +156,7 @@ Agent messages carry `props.model` (the model id, provider, tier and cost) and, 
 - `desktop/src/lib/api.ts` handles REST calls.
 - `socket.ts` manages the WebSocket: authentication, replay, and a resync when replay isn't possible.
 - `store.ts` is one Zustand store per window.
+- Home (`src/dashboard/Overview.tsx`) is a dashboard from `GET /workspaces/:id/dashboard` (`server/src/app/dashboard.ts`): runs in progress and finished in channels you're in, with tokens per run from `usage_events`, and for admins the token totals and a 14-day series in your time zone (the app sends its UTC offset). It refetches when a `run_updated` event arrives and every 30 seconds.
 - `realtime.ts` applies events, raises banners and sets the badge. In the Mac app, the dashboard window owns the only socket and relays its events to the panel window.
 - The Rust core (`desktop/src-tauri/src/lib.rs`) handles everything native:
   - the menu bar icon and its badge

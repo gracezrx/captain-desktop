@@ -1,4 +1,4 @@
-import {AtSign, Command, KeyRound, ListChecks, LogOut, Mic, MousePointerClick, Sparkles, UserPlus, Users, X} from 'lucide-react';
+import {AtSign, LogOut, UserPlus, X} from 'lucide-react';
 import {Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 
 import {ChatIcon} from '../components/ChatIcon';
@@ -7,16 +7,15 @@ import {isGrouped, MessageRow} from '../components/MessageRow';
 import {Typing} from '../components/Typing';
 import {api, errorMessage} from '../lib/api';
 import {dayLabel} from '../lib/format';
-import {isTauri} from '../lib/native';
 import {mentionsAgent} from '../lib/send';
-import {openSetup} from '../lib/setup';
-import {useShortcutLabels} from '../lib/shortcuts';
 import {agentForUser, channelTitle, displayName, isAgentChannel, otherUserId, useStore} from '../lib/store';
 import type {ClientPost} from '../lib/types';
 
+import {Overview} from './Overview';
+
 export function ChatView({channelId, onInvite, onModels}: {channelId: string | null; onInvite: () => void; onModels: () => void}) {
     if (!channelId) {
-        return <Home onInvite={onInvite} onModels={onModels}/>;
+        return <Overview onInvite={onInvite} onModels={onModels}/>;
     }
     return <Chat key={channelId} channelId={channelId} onModels={onModels}/>;
 }
@@ -307,80 +306,5 @@ function ThreadPane({rootId, onClose, onOpenImage}: {rootId: string; onClose: ()
                 <Composer channelId={channel.id} rootId={rootId} variant='dashboard' draftKey={`thread.${rootId}`} placeholder='Reply in thread'/>
             </div>
         </aside>
-    );
-}
-
-function Home({onInvite, onModels}: {onInvite: () => void; onModels: () => void}) {
-    const me = useStore((s) => s.me);
-    const keys = useShortcutLabels();
-    const demoMode = useStore((s) => s.demoMode);
-    const agents = useStore((s) => s.agents);
-    const workspace = useStore((s) => s.workspace);
-    const addChannel = useStore((s) => s.addChannel);
-    const setActive = useStore((s) => s.setActiveChannel);
-    const captain = Object.values(agents).find((a) => a.isCoordinator);
-    const talk = async () => {
-        if (!captain || !workspace) {
-            return;
-        }
-        const c = await api.directMessage(workspace.id, captain.userId);
-        addChannel(c);
-        setActive(c.id);
-    };
-    return (
-        <div data-tauri-drag-region className='grid flex-1 place-items-center overflow-y-auto px-8 py-10'>
-            <div className='max-w-[480px] text-center'>
-                <h1 className='text-[32px] font-extrabold tracking-tight text-ink'>Hi {me?.displayName.split(' ')[0]}</h1>
-                <p className='mt-2 text-[15px] text-muted'>Your team and its agents, in one place. Pick a chat, or start here:</p>
-                <div className='mt-6 flex justify-center gap-2'>
-                    {captain && (
-                        <button type='button' onClick={() => void talk()} className='inline-flex h-10 items-center gap-2 rounded-full bg-accent px-5 text-[13.5px] font-bold text-on-accent' style={{boxShadow: 'var(--shadow-send)'}}>
-                            <img src='/captain-mark.png' alt='' className='size-4 brightness-0 invert'/> Ask Captain
-                        </button>
-                    )}
-                    {workspace?.role !== 'guest' && (
-                        <button type='button' onClick={onInvite} className='inline-flex h-10 items-center gap-2 rounded-full px-5 text-[13.5px] font-semibold text-text ring-1 ring-line hover:bg-tint'>
-                            <UserPlus size={15}/> Invite your team
-                        </button>
-                    )}
-                    <button type='button' onClick={openSetup} className='inline-flex h-10 items-center gap-2 rounded-full px-5 text-[13.5px] font-semibold text-text ring-1 ring-line hover:bg-tint'>
-                        <ListChecks size={15}/> Get started
-                    </button>
-                </div>
-                {demoMode && (
-                    <div className='mt-7 flex items-center gap-3 rounded-2xl bg-gold-tint p-3.5 text-left ring-1 ring-gold/30'>
-                        <span className='grid size-8 shrink-0 place-items-center rounded-xl bg-surface text-gold-text'><KeyRound size={16}/></span>
-                        <span className='min-w-0 flex-1'>
-                            <span className='block text-[13.5px] font-bold text-ink'>{me?.instanceAdmin ? 'Connect a model' : 'Agents are in demo mode'}</span>
-                            <span className='block text-[12.5px] text-gold-text'>
-                                {me?.instanceAdmin ? 'Paste an OpenRouter key and every agent starts answering for real.' : 'They give sample answers until whoever runs this server adds a model key.'}
-                            </span>
-                        </span>
-                        {me?.instanceAdmin && (
-                            <button type='button' onClick={onModels} className='inline-flex h-9 shrink-0 items-center rounded-full bg-accent px-4 text-[13px] font-bold text-on-accent'>Add key</button>
-                        )}
-                    </div>
-                )}
-                <div className='mt-8 grid gap-2.5 text-left'>
-                    <Tip icon={<Sparkles size={16}/>} title='@captain plans the work' text='Ask for something big. Captain splits it across Researcher, Analyst, Writer and Designer, picks a model for each step, and posts one answer.'/>
-                    <Tip icon={<Users size={16}/>} title='Name two or more agents and they team up' text='“@researcher @writer …”: Captain splits the work between just the agents you named and posts one combined answer. Name one agent and it answers on its own.'/>
-                    <Tip icon={<MousePointerClick size={16}/>} title='Nothing leaves without a yes' text='Emails and other outside actions wait for your approval: a card in the chat and a banner on your Mac.'/>
-                    <Tip icon={<Command size={16}/>} title={`${keys.panel} opens the quick panel`} text='Write to any chat, snap your screen, or hold ⌥ to talk, without leaving what you are doing.'/>
-                    {isTauri && <Tip icon={<Mic size={16}/>} title={`Talk to Captain: hold ${keys.talk}`} text='Or press the little face on your screen. Captain answers out loud. Tap once for hands-free, and right-click it for options.'/>}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function Tip({icon, title, text}: {icon: React.ReactNode; title: string; text: string}) {
-    return (
-        <div className='flex items-start gap-3 rounded-2xl bg-surface p-3.5 ring-1 ring-line' style={{boxShadow: 'var(--shadow-control)'}}>
-            <span className='grid size-8 shrink-0 place-items-center rounded-xl bg-tint text-accent-text'>{icon}</span>
-            <span>
-                <span className='block text-[13.5px] font-bold text-ink'>{title}</span>
-                <span className='block text-[12.5px] text-muted'>{text}</span>
-            </span>
-        </div>
     );
 }

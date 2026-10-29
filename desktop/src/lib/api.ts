@@ -3,7 +3,7 @@
 // app, and in local storage on the web.
 
 import {isExtension, isTauri, LOCAL_SERVER, secretDelete, secretGet, secretSet} from './native';
-import type {Agent, AgentTool, Channel, ChannelMember, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
+import type {Agent, AgentTool, Channel, ChannelMember, Dashboard, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
 
 export type StoredSession = {serverUrl: string; token: string; userId: string};
 
@@ -233,6 +233,8 @@ export const api = {
     removeProviderKey: (id: string) => del(`/admin/providers/${id}`),
     checkProvider: (id: string) => post<ProviderCheck>(`/admin/providers/${id}/check`),
     usage: (wsId: string) => get<UsageSummary>(`/workspaces/${wsId}/usage`),
+    // tz: minutes behind UTC, so "today" and the daily chart follow your clock.
+    dashboard: (wsId: string) => get<Dashboard>(`/workspaces/${wsId}/dashboard?tz=${new Date().getTimezoneOffset()}`),
     approvals: (wsId: string) => get<{id: string; channelId: string; postId: string | null; runId: string | null; title: string; requestedBy: string | null; createdAt: number}[]>(`/workspaces/${wsId}/approvals`),
     run: (id: string) => get<Run>(`/runs/${id}`),
     cancelRun: (id: string) => post<Run>(`/runs/${id}/cancel`),

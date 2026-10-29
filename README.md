@@ -48,6 +48,8 @@ It comes in four parts:
   - A live plan card shows progress and has a Stop button.
   - Steps can hand questions to each other.
   - Agent replies stream in as they're written.
+- **Home dashboard**
+  - What agents are working on right now, what's waiting on you, what finished, and tokens burned (today, this month, by day and by agent; owners and admins).
 - **Approvals**
   - Email, and anything an agent marks as needing sign-off, becomes a decision card.
   - The work pauses and resumes exactly where it stopped, after Approve or Reject.

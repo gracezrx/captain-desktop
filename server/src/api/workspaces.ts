@@ -2,6 +2,7 @@ import type {FastifyInstance} from 'fastify';
 import {z} from 'zod';
 
 import * as agentsApp from '../app/agents.js';
+import * as dashboardApp from '../app/dashboard.js';
 import {adminResetLink} from '../app/passwords.js';
 import * as ws from '../app/workspaces.js';
 import {listPendingApprovals} from '../store/runs.js';
@@ -71,6 +72,8 @@ export function workspaceRoutes(app: FastifyInstance, api: Api): void {
     app.patch('/agents/:id', async (req) => agentsApp.editAgent(ctx, req.user, (req.params as P).id, req.body));
     app.get('/workspaces/:id/models', async (req) => agentsApp.models(ctx, req.user, (req.params as P).id));
     app.get('/workspaces/:id/usage', async (req) => agentsApp.usage(ctx, req.user, (req.params as P).id));
+    // Home: what's going on, what finished, and tokens burned (admins).
+    app.get('/workspaces/:id/dashboard', async (req) => dashboardApp.dashboard(ctx, req.user, (req.params as P).id, dashboardApp.parseOffset((req.query as {tz?: string}).tz)));
 
     // Decisions waiting for you (or anyone, if you're an admin) in channels you're in.
     app.get('/workspaces/:id/approvals', async (req) => {
