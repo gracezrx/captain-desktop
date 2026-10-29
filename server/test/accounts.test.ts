@@ -93,6 +93,12 @@ describe('accounts and workspaces', () => {
         await expectStatus(third.api.get(`/workspaces/${ws.id}/members`), 404);
     });
 
+    it('starts new workspaces with a $20 monthly budget', async () => {
+        const owner = await signup(s.base, {workspaceName: 'Default budget'});
+        const [ws] = await owner.api.get('/workspaces');
+        assert.equal(ws.monthlyBudgetUsd, 20);
+    });
+
     it('only admins see spend and set the budget', async () => {
         const owner = await signup(s.base, {workspaceName: 'Budget'});
         const [ws] = await owner.api.get('/workspaces');

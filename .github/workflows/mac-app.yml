@@ -44,10 +44,33 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      # With Quest Space's Apple Developer ID in the repository secrets, the
+      # app is signed and notarized (opens without a warning); without them
+      # it's signed ad hoc. See docs/DEPLOY.md → "Signing and notarizing".
       - name: Build the app
         working-directory: desktop
+        env:
+          SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -o pipefail
+          if [ -n "$SECRET_APPLE_CERTIFICATE" ] && [ -n "$SECRET_APPLE_SIGNING_IDENTITY" ]; then
+            export APPLE_CERTIFICATE="$SECRET_APPLE_CERTIFICATE" APPLE_CERTIFICATE_PASSWORD="$SECRET_APPLE_CERTIFICATE_PASSWORD"
+            export APPLE_SIGNING_IDENTITY="$SECRET_APPLE_SIGNING_IDENTITY"
+            node -e "const f='src-tauri/tauri.conf.json';const c=JSON.parse(require('fs').readFileSync(f,'utf8'));delete c.bundle.macOS.signingIdentity;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+            if [ -n "$SECRET_APPLE_ID" ] && [ -n "$SECRET_APPLE_PASSWORD" ] && [ -n "$SECRET_APPLE_TEAM_ID" ]; then
+              export APPLE_ID="$SECRET_APPLE_ID" APPLE_PASSWORD="$SECRET_APPLE_PASSWORD" APPLE_TEAM_ID="$SECRET_APPLE_TEAM_ID"
+              echo "::notice title=Signing::Developer ID, notarized"
+            else
+              echo "::notice title=Signing::Developer ID, not notarized (APPLE_ID, APPLE_PASSWORD or APPLE_TEAM_ID missing)"
+            fi
+          else
+            echo "::notice title=Signing::ad hoc (no Apple Developer ID secrets yet)"
+          fi
           npm run tauri build -- --bundles app,dmg 2>&1 | tee "$RUNNER_TEMP/build.log"
 
       # Build logs aren't always easy to reach: put the end of a failed build,
@@ -98,5 +121,5 @@ jobs:
           gh release delete app-latest --yes --cleanup-tag || true
           gh release create app-latest --prerelease --target "$GITHUB_SHA" \
             --title "Captain for Mac (latest build)" \
-            --notes "Built from ${GITHUB_SHA::7}. Mac: download Captain.dmg, open it, and drag Captain to Applications. The first time, right-click Captain and choose Open (it isn't notarized yet). Chrome: unzip Captain-Chrome-extension.zip, open chrome://extensions, turn on Developer mode, and choose Load unpacked." \
+            --notes "Built from ${GITHUB_SHA::7}. Mac: download Captain.dmg, open it, and drag Captain to Applications. If it isn't notarized yet, right-click Captain and choose Open the first time. Chrome: unzip Captain-Chrome-extension.zip, open chrome://extensions, turn on Developer mode, and choose Load unpacked." \
             "${{ steps.files.outputs.dir }}/Captain.dmg" "${{ steps.files.outputs.dir }}/Captain-mac.zip" "${{ steps.files.outputs.dir }}/Captain-Chrome-extension.zip"

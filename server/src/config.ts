@@ -29,6 +29,14 @@ function bool(name: string, fallback: boolean): boolean {
     return v === '' ? fallback : ['1', 'true', 'yes', 'on'].includes(v);
 }
 
+function budget(v: string): number | null {
+    if (/^(none|off|no|unlimited)$/i.test(v.trim())) {
+        return null;
+    }
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : 20;
+}
+
 const production = env('NODE_ENV') === 'production';
 const secret = env('APP_SECRET');
 if (production && secret.length < 32) {
@@ -66,6 +74,8 @@ export const config = {
     databaseUrl: env('DATABASE_URL', 'postgres://postgres@127.0.0.1:5432/captain'),
     databasePoolSize: int('DATABASE_POOL_SIZE', 10),
     appSecret: secret || (production ? '' : devSecret()),
+    // The monthly AI budget each new workspace starts with (USD). "none" for no limit.
+    defaultWorkspaceBudgetUsd: budget(env('DEFAULT_WORKSPACE_BUDGET_USD', '20')),
     // Emails of people who run this server (set model keys) besides the first person to sign up.
     instanceAdmins: env('INSTANCE_ADMINS').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     // Origins allowed to call the API from a browser (the Mac app's and the dev server's).

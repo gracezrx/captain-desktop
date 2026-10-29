@@ -40,7 +40,8 @@ export async function createWorkspaceFor(ctx: Ctx, user: UserRow, nameInput: str
     const name = workspaceNameSchema.parse(nameInput);
     const slug = await freeSlug(ctx, name);
     const ws = await tx(ctx.sql, async (t) => {
-        const w = await createWorkspace(t, {name, slug, createdBy: user.id});
+        // New workspaces start with a monthly AI budget (admins can change it).
+        const w = await createWorkspace(t, {name, slug, createdBy: user.id, monthlyBudgetUsd: config.defaultWorkspaceBudgetUsd});
         await addWorkspaceMember(t, w.id, user.id, 'owner');
         const general = await createChannel(t, {workspaceId: w.id, type: 'O', name: 'general', displayName: 'General', purpose: 'Everyone in the workspace, and the agents', createdBy: user.id});
         await addChannelMember(t, general.id, user.id, 'admin');

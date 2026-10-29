@@ -119,7 +119,7 @@ describe('chat', () => {
         assert.equal(ok.status, 200);
         assert.equal(await ok.text(), 'hello file');
         assert.match(ok.headers.get('content-security-policy') ?? '', /sandbox/);
-        const tampered = await fetch(`${s.base}${post.files[0].url.replace(/sig=./, 'sig=x')}`);
+        const tampered = await fetch(`${s.base}${post.files[0].url.replace(/sig=(.)/, (_m: string, c: string) => `sig=${c === 'x' ? 'y' : 'x'}`)}`);
         assert.equal(tampered.status, 404);
     });
 

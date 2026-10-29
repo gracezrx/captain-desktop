@@ -126,7 +126,7 @@ GitHub builds the app on a Mac: **Actions → Mac app → Run workflow** (leave 
 - `Captain-mac.zip`: the same app, zipped
 - `Captain-Chrome-extension.zip`: the extension
 
-The app is signed ad hoc, not with an Apple Developer ID, so macOS asks the first time: right-click Captain → **Open**. If macOS still refuses, open **System Settings → Privacy & Security** and click **Open Anyway**.
+Until Quest Space's Developer ID is added (see Signing and notarizing below), the app is signed ad hoc, so macOS asks the first time: right-click Captain → **Open**. If macOS still refuses, open **System Settings → Privacy & Security** and click **Open Anyway**.
 
 ### Captain on this Mac (the built-in server)
 
@@ -154,14 +154,20 @@ npm run tauri build -- --bundles app,dmg
 - `npm run tauri dev` runs the app against the dev server.
 - On first use, macOS asks for Screen Recording (snapshots), Microphone and Speech Recognition (voice typing), and Notifications.
 
-### Shipping to testers
+### Signing and notarizing
 
-For an app that opens without warnings, sign and notarize with an Apple Developer ID. Set these variables (as repository secrets for the workflow) before building, and Tauri signs and notarizes:
+With Quest Space's Apple Developer account, the GitHub build signs the app with its Developer ID and has Apple notarize it, so it opens without a warning. Someone with access to the account adds six repository secrets (GitHub → the repo → Settings → Secrets and variables → Actions):
 
-- `APPLE_SIGNING_IDENTITY`
-- `APPLE_ID`
-- `APPLE_PASSWORD` (an app-specific password)
-- `APPLE_TEAM_ID`
+| Secret | What it is |
+| --- | --- |
+| `APPLE_CERTIFICATE` | The "Developer ID Application" certificate with its private key, exported from Keychain Access as a .p12 and encoded: `base64 -i cert.p12 \| pbcopy` |
+| `APPLE_CERTIFICATE_PASSWORD` | The password chosen when exporting the .p12 |
+| `APPLE_SIGNING_IDENTITY` | The certificate's name, e.g. `Developer ID Application: Quest Space Inc. (AB12CD34EF)` (`security find-identity -v -p codesigning` lists it) |
+| `APPLE_ID` | The Apple ID email of an account member |
+| `APPLE_PASSWORD` | An app-specific password for that Apple ID (appleid.apple.com → Sign-In and Security → App-Specific Passwords) |
+| `APPLE_TEAM_ID` | The 10-character team ID (developer.apple.com → Membership) |
+
+Then run the workflow again. The run's summary says which signing it used. Without the secrets, builds are signed ad hoc.
 
 ## The Chrome extension
 

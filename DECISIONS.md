@@ -67,7 +67,7 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | E2 ★ | **Each model has routes in order:** the vendor's own API first, then OpenRouter, then any OpenAI-compatible gateway (for example, Captain's Yunwu account). A model is usable as soon as any one of its providers has a key, so `OPENROUTER_API_KEY` alone covers everything. | the `routes` lists in `models.json` |
 | E3 | **Picking a tier for a request:** <ul><li>An agent's tier is the floor. For example, Analyst always works at "hard".</li><li>"auto" lets the request decide.</li><li>Quick heuristics raise it for long or demanding requests.</li><li>An optional cheap-model classifier is off by default.</li></ul> | `ROUTER_LLM_CLASSIFIER=true`, `llm/classify.ts` |
 | E4 | **Fallback:** <ul><li>The router tries the tier's models by priority, then lower tiers, then higher ones.</li><li>It needs a vision model when images are attached, and tool support when tools are used.</li><li>A model and provider pair that fails 3 times is skipped for 2 minutes, tracked per instance.</li></ul> | `llm/router.ts` |
-| E5 | **Spend:** <ul><li>Each workspace can set a monthly budget, reset on the 1st (UTC). There's no budget by default.</li><li>Past the budget, agents stop with a clear message and no model is called.</li><li>Only admins see spend.</li><li>Every call is recorded with its tokens, cost and latency.</li></ul> | Settings → Models & spend |
+| E5 | **Spend:** <ul><li>Each workspace can set a monthly budget, reset on the 1st (UTC). New workspaces start with **$20 a month**; admins can change or remove it.</li><li>Past the budget, agents stop with a clear message and no model is called.</li><li>Only admins see spend.</li><li>Every call is recorded with its tokens, cost and latency.</li></ul> | Settings → Models & spend; `DEFAULT_WORKSPACE_BUDGET_USD` (`none` for no limit) |
 | E6 | With no model key at all, a **demo model** answers, marked as demo. You can click through plans, approvals and documents before adding keys. | `LLM_DEMO_FALLBACK=false` turns it off. |
 | E7 ★ | **Model keys are pasted in the app** (Settings → Models & spend), with OpenRouter first and the other providers folded away. <ul><li>Saving sends a tiny request to the provider's cheapest model; a key the provider rejects isn't saved.</li><li>Keys are encrypted with `APP_SECRET` and only their last four characters are shown.</li><li>A key saved in Settings wins over the environment variable.</li><li>Each change reaches every instance within a second.</li></ul> Keys are per server, not per workspace. | `server/src/app/admin.ts`, `server/src/llm/keys.ts`. Per-workspace keys (each team pays its own provider) would be a follow-up. |
 
@@ -80,13 +80,24 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | F3 | The Mac app's default server is set at build time (`VITE_CAPTAIN_URL`), and anyone can change it on the sign-in screen. | `desktop/src/lib/api.ts` |
 | F4 | The sidebar lists every agent in the workspace, whether or not you've messaged it. Clicking one opens your DM with it. | `desktop/src/dashboard/Sidebar.tsx` |
 | F5 ★ | **The Mac app runs the server itself** ("This Mac"), with the Mac's own Node.js 22+, on 127.0.0.1:8787. It starts with the app and stops on quit. The database address and secret are kept in the Keychain. Hosted servers still work: "A Captain server" on the sign-in screen. Node isn't bundled, which keeps the app at about 40 MB; testers who use a hosted server don't need Node. | `desktop/src-tauri/src/lib.rs` ("built-in server"), `desktop/src/components/ThisMac.tsx`. Bundling Node (+~100 MB) would remove the requirement. |
-| F6 | **GitHub builds the Mac app** on a macOS runner (Actions → Mac app). The .dmg and the extension go to the `app-latest` release. Builds are signed ad hoc, so the first open needs right-click → Open. Each build uses about 100 of your Actions minutes, because macOS minutes count ten times. | `.github/workflows/mac-app.yml`; add Apple signing secrets to notarize |
+| F6 | **GitHub builds the Mac app** on a macOS runner (Actions → Mac app). The .dmg and the extension go to the `app-latest` release. Until Quest Space's Developer ID secrets are added, builds are signed ad hoc, so the first open needs right-click → Open. Each build uses about 100 of your Actions minutes, because macOS minutes count ten times. | `.github/workflows/mac-app.yml`; add Apple signing secrets to notarize |
 | F7 ★ | **The Chrome extension** reuses the menu bar panel: write, inbox and decisions in the toolbar popup and in the side panel. It also offers: <ul><li>"This page", "Selection" and "Let agents read it" (the page's text attached as a .md file agents read)</li><li>right-click → Send to Captain (page, link, selection, image, tab screenshot)</li><li>a badge with what's waiting</li></ul> Pages are read only on a click: the popup uses the tab it was opened on, and the side panel asks Chrome once for permission to read pages. | `desktop/src/extension/`, `desktop/extension/manifest.json` |
 | F8 | The extension connects to **This Mac** (the app's built-in server) by default. For a hosted server, Chrome asks to allow that address at sign-in. In the side panel, sending a message opens that conversation so replies appear in place; the popup closes after sending. | `desktop/src/lib/api.ts` (`DEFAULT_SERVER`), `desktop/src/extension/App.tsx` |
 
-## Open questions only you can answer
+## Your answers (Oct 28)
 
-1. **Pricing and limits for testers:** should each workspace start with a budget, such as $20 a month, instead of none?
-2. **Who can approve:** is "the person who asked, or an admin" right, or should any member be able to approve in shared channels?
-3. **Repo home and license:** this is meant for `gracezrx/captain-desktop` (private, no license). Create the empty repo and I'll push. Choose a license before making it public.
-4. **Team rules:** the Captain development standards (6.1) favor one codebase. This is a separate product in your personal account, as you asked; check with Lisen whether that's fine or whether it should move under Quest1120 later.
+| Question | Answer | What changed |
+| --- | --- | --- |
+| Voice typing | Hold to talk, tap for hands-free | Nothing: that's how it works |
+| Hosted server | Render | `render.yaml` is ready. Deploying needs your Render account (DEPLOY.md → On Render). |
+| Apple Developer account | Quest Space has one | The Mac build signs and notarizes once six secrets are added (DEPLOY.md → Signing and notarizing) |
+| App name | Captain | Nothing |
+| Team sign-off | Grace asks Lisen and Sunny before it goes beyond testers | — |
+| Who can sign up (hosted) | Invite-only | Nothing: B9 |
+| Who can approve | The person who asked, or an admin | Nothing: D6 |
+| Default budget | $20 a month per new workspace | E5 |
+| When agents answer | DMs, @mentions and their threads | Nothing: D2 |
+
+## Still open
+
+1. **License:** the repo (`gracezrx/captain-desktop`) is private with no license. Choose one before making it public.

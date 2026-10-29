@@ -102,7 +102,7 @@ The server runs on any Postgres 14 or newer, including Supabase ([docs/DEPLOY.md
 cd server && npm test     # needs a captain_test database
 ```
 
-The 64 tests cover:
+The 65 tests cover:
 
 - accounts, invites, roles and password resets
 - private channels and DMs
