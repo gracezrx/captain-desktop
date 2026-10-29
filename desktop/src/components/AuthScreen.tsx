@@ -1,8 +1,10 @@
 import {useEffect, useState} from 'react';
 
 import {confirmPasswordReset, DEFAULT_SERVER, errorMessage, invitePreview, normalizeServer, requestPasswordReset, serverConfig, signIn, signUp, type StoredSession} from '../lib/api';
-import {isTauri} from '../lib/native';
+import {isTauri, LOCAL_SERVER} from '../lib/native';
 import type {InvitePreview} from '../lib/types';
+
+import {ThisMac, useLocalServer} from './ThisMac';
 
 export const field = 'h-11 w-full rounded-2xl bg-bg-subtle px-4 text-[14px] text-ink ring-1 ring-line outline-none transition-shadow placeholder:text-muted focus:ring-2 focus:ring-accent';
 
@@ -62,8 +64,13 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
     const [error, setError] = useState<string | null>(null);
     const [openSignup, setOpenSignup] = useState(true);
     const [preview, setPreview] = useState<InvitePreview | null>(null);
+    const onThisMac = isTauri && server === LOCAL_SERVER;
+    const local = useLocalServer(onThisMac);
 
     useEffect(() => {
+        if (onThisMac && !local.ready) {
+            return;
+        }
         serverConfig(server).then((c) => {
             setOpenSignup(c.openSignup);
             setEmailEnabled(c.emailEnabled);
@@ -71,7 +78,7 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
         if (invite) {
             invitePreview(server, invite).then(setPreview).catch(() => undefined);
         }
-    }, [server, invite]);
+    }, [server, invite, onThisMac, local.ready]);
 
     const submit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -115,6 +122,39 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
         joining ? 'Create an account, or sign in if you have one.' : mode === 'signin' ? 'Sign in to your workspace.' : 'Your team and its AI agents, in one chat.';
     const disabled = busy || (mode === 'forgot' ? !email || !emailEnabled : mode === 'reset' ? password.length < 8 : !email || !password || (mode === 'signup' && (!name || signupBlocked)));
     const label = busy ? 'One moment…' : mode === 'forgot' ? 'Email me a link' : mode === 'reset' ? 'Set password and sign in' : mode === 'signin' ? 'Sign in' : joining ? 'Join workspace' : 'Create account';
+
+    const where = !recovering && (isTauri ? (
+        <Where server={server} setServer={setServer}/>
+    ) : import.meta.env.DEV ? (
+        <div className='mt-5 text-center text-[12px] text-muted'>
+            {editServer ? (
+                <input className={`${field} h-9 text-[13px]`} value={server} onChange={(e) => setServer(e.target.value)} onBlur={() => setEditServer(false)} autoFocus/>
+            ) : (
+                <button type='button' onClick={() => setEditServer(true)} className='hover:text-ink'>
+                    Server: <span className='font-semibold'>{server.replace(/^https?:\/\//, '')}</span> · change
+                </button>
+            )}
+        </div>
+    ) : null);
+
+    // The Mac app's own server isn't up yet: set it up, or wait for it.
+    if (onThisMac && !local.ready && !recovering) {
+        return (
+            <div className='wash grid h-full place-items-center overflow-y-auto px-6 py-10'>
+                <div className='w-full max-w-[380px]'>
+                    <div data-tauri-drag-region className='mb-7 flex flex-col items-center text-center'>
+                        <span className='grid size-16 place-items-center rounded-[22px] bg-white ring-1 ring-line' style={{boxShadow: 'var(--shadow-overlay)'}}>
+                            <img src='/captain-mark.png' alt='' className='size-10'/>
+                        </span>
+                        <h1 className='mt-5 text-[26px] font-extrabold tracking-tight text-ink'>{local.status && !local.status.configured ? 'Run Captain on this Mac' : 'Captain on this Mac'}</h1>
+                        <p className='mt-1.5 text-[14px] text-muted'>Everything runs here; no terminal needed.</p>
+                    </div>
+                    <ThisMac status={local.status} onChanged={local.refresh}/>
+                    {where}
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className='wash grid h-full place-items-center overflow-y-auto px-6 py-10'>
@@ -193,18 +233,58 @@ export function AuthScreen({onSignedIn}: {onSignedIn: (s: StoredSession) => void
                     </div>
                 )}
 
-                {(isTauri || import.meta.env.DEV) && !recovering && (
-                    <div className='mt-5 text-center text-[12px] text-muted'>
-                        {editServer ? (
-                            <input className={`${field} h-9 text-[13px]`} value={server} onChange={(e) => setServer(e.target.value)} onBlur={() => setEditServer(false)} autoFocus/>
-                        ) : (
-                            <button type='button' onClick={() => setEditServer(true)} className='hover:text-ink'>
-                                Server: <span className='font-semibold'>{server.replace(/^https?:\/\//, '')}</span> · change
-                            </button>
-                        )}
-                    </div>
-                )}
+                {where}
             </form>
+        </div>
+    );
+}
+
+// In the Mac app: run Captain here, or use a hosted Captain server.
+function Where({server, setServer}: {server: string; setServer: (s: string) => void}) {
+    const here = server === LOCAL_SERVER;
+    const [edit, setEdit] = useState(false);
+    const remembered = () => {
+        try {
+            return localStorage.getItem('captain.remoteServer') ?? '';
+        } catch {
+            return '';
+        }
+    };
+    const remember = (url: string) => {
+        try {
+            localStorage.setItem('captain.remoteServer', url);
+        } catch {
+            // not remembered
+        }
+    };
+    const pill = (on: boolean) => `h-7 rounded-full px-3.5 transition-colors ${on ? 'bg-surface text-ink shadow-sm' : 'text-muted hover:text-ink'}`;
+    return (
+        <div className='mt-6 flex flex-col items-center gap-2 text-[12px] text-muted'>
+            <div className='inline-flex items-center gap-1 rounded-full bg-tint p-1 font-bold'>
+                <button type='button' className={pill(here)} onClick={() => setServer(LOCAL_SERVER)}>This Mac</button>
+                <button type='button' className={pill(!here)} onClick={() => {
+                    const r = remembered();
+                    setServer(r);
+                    setEdit(!r);
+                }}>A Captain server</button>
+            </div>
+            {!here && (edit ? (
+                <input
+                    className={`${field} h-9 text-[13px]`}
+                    value={server}
+                    placeholder='captain.example.com'
+                    onChange={(e) => setServer(e.target.value)}
+                    onBlur={() => {
+                        remember(server.trim());
+                        setEdit(false);
+                    }}
+                    autoFocus
+                />
+            ) : (
+                <button type='button' onClick={() => setEdit(true)} className='hover:text-ink'>
+                    <span className='font-semibold'>{server.replace(/^https?:\/\//, '') || 'Add an address'}</span> · change
+                </button>
+            ))}
         </div>
     );
 }

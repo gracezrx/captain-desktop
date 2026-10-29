@@ -194,3 +194,64 @@ async function browserPreviewCapture(): Promise<Blob> {
     g.fillText('In the Mac app this is a real capture of your screen.', 220, 360);
     return new Promise((resolve) => c.toBlob((b) => resolve(b!), 'image/png'));
 }
+
+// ------------------------------------------------------------ built-in server
+
+// The Mac app can run the Captain server itself (see src-tauri/src/lib.rs).
+export const LOCAL_SERVER = 'http://127.0.0.1:8787';
+
+export type LocalServerStatus = {
+    configured: boolean; // has a database address
+    running: boolean;
+    starting: boolean;
+    url: string;
+    error: string | null;
+    log: string | null; // the end of the server's log, when it stopped
+};
+
+export async function localServerStatus(): Promise<LocalServerStatus | null> {
+    if (!isTauri) {
+        return null;
+    }
+    return invoke<LocalServerStatus>('local_server_status').catch(() => null);
+}
+
+// Accepts a database address, or a whole server .env (its DATABASE_URL and APP_SECRET lines).
+export function parseServerSettings(text: string): {databaseUrl: string; appSecret: string | null} {
+    const t = text.trim();
+    const line = (name: string) => t.split(/\r?\n/).map((l) => l.trim()).find((l) => l.startsWith(`${name}=`))?.slice(name.length + 1).trim().replace(/^["']|["']$/g, '') ?? null;
+    if (/^DATABASE_URL=/m.test(t)) {
+        return {databaseUrl: line('DATABASE_URL') ?? '', appSecret: line('APP_SECRET')};
+    }
+    return {databaseUrl: t, appSecret: null};
+}
+
+export async function localServerSetup(text: string): Promise<void> {
+    const {databaseUrl, appSecret} = parseServerSettings(text);
+    await invoke('local_server_setup', {databaseUrl, appSecret});
+}
+
+export async function localServerRestart(): Promise<void> {
+    await invoke('local_server_restart');
+}
+
+export async function localServerForget(): Promise<void> {
+    await invoke('local_server_forget');
+}
+
+// Wait until a server answers its readiness check.
+export async function waitForServer(url: string, timeoutMs = 30_000): Promise<boolean> {
+    const until = Date.now() + timeoutMs;
+    while (Date.now() < until) {
+        try {
+            const res = await fetch(`${url}/readyz`, {signal: AbortSignal.timeout(2000)});
+            if (res.ok) {
+                return true;
+            }
+        } catch {
+            // not up yet
+        }
+        await new Promise((r) => setTimeout(r, 500));
+    }
+    return false;
+}

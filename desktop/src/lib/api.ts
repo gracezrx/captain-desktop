@@ -2,16 +2,17 @@
 // The session (server address and token) lives in the macOS Keychain in the
 // app, and in local storage on the web.
 
-import {isTauri, secretDelete, secretGet, secretSet} from './native';
+import {isTauri, LOCAL_SERVER, secretDelete, secretGet, secretSet} from './native';
 import type {Agent, AgentTool, Channel, ChannelMember, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
 
 export type StoredSession = {serverUrl: string; token: string; userId: string};
 
-// The web app talks to the server it was loaded from; the Mac app to the
-// address it was built for (VITE_CAPTAIN_URL) unless the person changes it.
+// The web app talks to the server it was loaded from. The Mac app talks to
+// its own built-in server, or to the address it was built for
+// (VITE_CAPTAIN_URL); the person can switch on the sign-in screen.
 export const DEFAULT_SERVER = !isTauri && !import.meta.env.DEV ?
     location.origin :
-    ((import.meta.env.VITE_CAPTAIN_URL as string | undefined) || 'http://localhost:8080');
+    ((import.meta.env.VITE_CAPTAIN_URL as string | undefined) || (isTauri ? LOCAL_SERVER : 'http://localhost:8080'));
 
 export class ApiError extends Error {
     readonly status: number;

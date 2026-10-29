@@ -6,3 +6,5 @@ target/
 .DS_Store
 desktop/src-tauri/gen/
 server/data/
+desktop/src-tauri/resources/server/*
+!desktop/src-tauri/resources/server/README.md

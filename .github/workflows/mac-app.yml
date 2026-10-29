@@ -46,7 +46,23 @@ jobs:
 
       - name: Build the app
         working-directory: desktop
-        run: npm run tauri build -- --bundles app,dmg
+        run: |
+          set -o pipefail
+          npm run tauri build -- --bundles app,dmg 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      # Build logs aren't always easy to reach: put the end of a failed build,
+      # and the warnings of a good one, where the run's summary shows them.
+      - name: Report the build
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/build.log"
+          [ -f "$log" ] || exit 0
+          enc() { sed 's/%/%25/g; s/\r//g' | awk 'BEGIN{ORS="%0A"} {print}'; }
+          if grep -q "Finished" "$log" && [ -d desktop/src-tauri/target/release/bundle/macos/Captain.app ]; then
+            echo "::notice title=Rust warnings::$(grep -A6 '^warning' "$log" | head -80 | enc)"
+          else
+            echo "::error title=Build output::$(grep -v '^\s*Compiling ' "$log" | tail -n 70 | enc)"
+          fi
 
       - name: Collect the files
         id: files
@@ -55,9 +71,12 @@ jobs:
           out="$RUNNER_TEMP/captain"
           mkdir -p "$out"
           bundle=desktop/src-tauri/target/release/bundle
-          ditto -c -k --keepParent "$bundle/macos/Captain.app" "$out/Captain-mac.zip"
+          app="$bundle/macos/Captain.app"
+          test -f "$app/Contents/Resources/server/dist/src/main.js" || { echo "::error::The built-in server is missing from the app"; exit 1; }
+          ditto -c -k --keepParent "$app" "$out/Captain-mac.zip"
           cp "$bundle"/dmg/*.dmg "$out/Captain.dmg"
-          ls -la "$out"
+          codesign -dv "$app" 2>&1 | grep -E "Signature|Identifier" || true
+          echo "::notice title=Sizes::app $(du -sh "$app" | cut -f1), dmg $(du -h "$out/Captain.dmg" | cut -f1), zip $(du -h "$out/Captain-mac.zip" | cut -f1)"
           echo "dir=$out" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4

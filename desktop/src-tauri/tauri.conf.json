@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build && npm run bundle:server",
     "frontendDist": "../dist"
   },
   "app": {
@@ -66,6 +66,9 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "signingIdentity": "-"
+    },
+    "resources": {
+      "resources/server": "server"
     }
   }
 }

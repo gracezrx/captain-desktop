@@ -1,4 +1,5 @@
 import {loadSession, setUnauthorizedHandler, signOut, type StoredSession} from './api';
+import {isTauri, LOCAL_SERVER, waitForServer} from './native';
 import {startRealtime} from './realtime';
 import {useStore} from './store';
 
@@ -49,6 +50,10 @@ export async function endSession(): Promise<void> {
 export async function resume(): Promise<boolean> {
     const session = await loadSession();
     if (!session) {
+        return false;
+    }
+    // The app's own server starts with the app: give it a moment.
+    if (isTauri && session.serverUrl === LOCAL_SERVER && !(await waitForServer(LOCAL_SERVER, 40_000))) {
         return false;
     }
     try {
