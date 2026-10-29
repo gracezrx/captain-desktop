@@ -7,7 +7,7 @@ You need Node 22 and Postgres 14 or newer.
 ```bash
 createdb captain                         # or: docker run -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16
 cd server
-cp .env.example .env                     # optional: add OPENROUTER_API_KEY for real answers
+cp .env.example .env                     # optional; model keys can be pasted in the app
 npm install
 npm run dev                              # http://localhost:8080 (API); applies migrations on start
 
@@ -16,9 +16,9 @@ npm install
 npm run dev                              # http://localhost:1420 (app, talks to :8080)
 ```
 
-- Open http://localhost:1420 and create an account. That makes your workspace, with #general and five agents.
+- Open http://localhost:1420 and create an account. That makes your workspace, with #general and five agents. The first account on a server also runs it: it can set model keys.
 - The menu bar panel's browser preview is at http://localhost:1420/panel.html.
-- With no model key set, agents answer in **demo mode**. Plans, approvals and documents still work, so you can click through everything.
+- With no model key set, agents answer in **demo mode**. Plans, approvals and documents still work, so you can click through everything. To turn on real models, see [Model keys](#model-keys).
 
 Run the tests with `cd server && npm test`. They need a `captain_test` database, and `TEST_DATABASE_URL` overrides its address. They exercise:
 
@@ -39,19 +39,53 @@ open http://localhost:8080
 
 This runs Postgres and the Captain image. The image holds the API, the web app, real-time updates and the agent workers. Data lives in two volumes: `pgdata` for the database and `files` for uploads.
 
+## With Supabase as the database
+
+Captain needs only Postgres from Supabase: no Supabase Auth, storage or client keys. The server creates its own tables in the `public` schema on first start.
+
+1. In the Supabase dashboard, open the project and click **Connect**.
+2. Copy the **Session pooler** connection string. It looks like `postgres://postgres.<project-ref>:[YOUR-PASSWORD]@aws-0-<region>.pooler.supabase.com:5432/postgres`.
+   - Use the session pooler, port **5432**. The transaction pooler (6543) can't carry real-time updates between instances or the migration lock, and the server warns if you use it.
+   - The direct connection (`db.<project-ref>.supabase.co`) works too where the host has IPv6. Render doesn't, so use the pooler there.
+3. Put your database password in place of `[YOUR-PASSWORD]`. If you don't know it, reset it under **Project Settings → Database**.
+4. Set the whole string as `DATABASE_URL` on your host. Keep it out of the repo and out of chat: it gives full access to the database.
+
+What the server does for Supabase:
+
+- It turns on TLS for Supabase addresses.
+- It turns on row-level security for every table it creates. Supabase publishes the `public` schema through its Data API to anyone holding the project's public key. With row-level security on and no policies, that API returns nothing. The server connects as the tables' owner, so its own queries aren't affected.
+
+Connection budget: each instance opens up to `DATABASE_POOL_SIZE` (default 10) connections, plus one for real-time and one for the migration lock. Supabase's smallest plan allows about 15 pooler connections per user, so with two instances set `DATABASE_POOL_SIZE=5`.
+
 ## On Render
 
-`render.yaml` is a Blueprint for one Docker web service with a 10 GB disk for uploads, plus a managed Postgres.
+`render.yaml` is a Blueprint for one Docker web service with a 10 GB disk for uploads. It uses your own database, such as Supabase.
 
 1. In Render: **New → Blueprint**, and pick this repo.
 2. Fill in the values marked `sync: false`:
-   - `PUBLIC_URL`
-   - one model key, such as `OPENROUTER_API_KEY`
+   - `DATABASE_URL`: the Supabase session pooler string from above
+   - `PUBLIC_URL`, such as `https://captain-xxxx.onrender.com`
+   - `INSTANCE_ADMINS`: your email, so only you can set model keys
+   - optionally a model key such as `OPENROUTER_API_KEY` (or paste it in the app later)
    - optionally `TAVILY_API_KEY` for web search
    - optionally `SMTP_URL` and `MAIL_FROM` for email
 3. Deploy. Migrations run when the service starts, and the health check is `/readyz`.
+4. Open the site, sign up with the email you put in `INSTANCE_ADMINS`, and paste your model key (below).
+
+Render generates `APP_SECRET` once and keeps it. Don't change it later: it encrypts saved model keys.
 
 Any host that runs a Docker image and gives it Postgres works the same way: Fly.io, Railway, a VM.
+
+## Model keys
+
+The people who run the server set model keys in the app, under **Settings → Models & spend → Model keys**. Everyone else sees only which models are on.
+
+- **Who runs the server:** the people listed in `INSTANCE_ADMINS`. If it's empty, the first person to sign up. On a server open to sign-ups, set `INSTANCE_ADMINS` before you share the link.
+- **Which key:** one [OpenRouter key](https://openrouter.ai/keys) turns on every model in the catalog. Vendor keys (Anthropic, OpenAI, Google, DeepSeek, Moonshot, …) are listed under "Other providers". They're tried before OpenRouter for their own models.
+- **Saving tries the key.** The server sends a tiny request to the provider's cheapest model. A key the provider rejects isn't saved; other problems, such as no credit, are shown and the key is kept. **Check** repeats the test later.
+- **Storage:** keys are encrypted with `APP_SECRET` (AES-256-GCM) and never sent back to the app, only their last four characters. Every instance picks up a change within a second.
+- **Precedence:** a key saved in Settings wins over the same provider's environment variable. **Remove** goes back to the environment variable, if there is one.
+- Saving and removing keys are recorded in `audit_log`.
 
 ## Keys and settings
 
@@ -59,10 +93,11 @@ All settings are environment variables. `server/.env.example` lists each one wit
 
 | Setting | What for |
 | --- | --- |
-| `APP_SECRET` | Signs file links. In production the server refuses to start without one. |
-| `DATABASE_URL` | Postgres. |
+| `APP_SECRET` | Signs file links and encrypts saved model keys. In production the server refuses to start without one. |
+| `DATABASE_URL` | Postgres 14 or newer, such as Supabase's session pooler. |
 | `PUBLIC_URL` | Used to build invite links. |
-| One model key | `OPENROUTER_API_KEY` covers every model in the catalog. Vendor keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, …) are tried first for their own models. `LLM_GATEWAY_URL` with `LLM_GATEWAY_KEY` adds any OpenAI-compatible gateway. |
+| `INSTANCE_ADMINS` | Your email: who may set model keys. |
+| A model key | Pasted in Settings, or set here. `OPENROUTER_API_KEY` covers every model in the catalog. Vendor keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `DEEPSEEK_API_KEY`, …) are tried first for their own models. `LLM_GATEWAY_URL` with `LLM_GATEWAY_KEY` adds any OpenAI-compatible gateway. |
 
 Optional:
 
@@ -74,6 +109,8 @@ Optional:
 | `TRUST_PROXY=1` | Behind one load balancer (Render, Fly, Railway). Leave `false` when the server is exposed directly. |
 | `EMAIL_DAILY_LIMIT` | Email recipients per workspace per day (default 100). |
 | `CORS_ORIGINS` | Browser origins other than the server itself and the Mac app. |
+| `DATABASE_POOL_SIZE` | Connections per instance (default 10). |
+| `DATABASE_SSL` | `require` forces TLS, `disable` turns it off. It's on automatically for Supabase, Neon and Render. |
 
 To add or reprioritize models, edit `server/config/models.json`. Check the prices there: they're estimates.
 
@@ -106,7 +143,7 @@ For a universal build that runs on Intel and Apple Silicon: `npm run tauri build
 ## Operating it
 
 - **Upgrades:** deploy the new image. Migrations apply at start under a lock, so several instances starting at once is safe. Never edit an applied migration; add a new numbered file.
-- **Backups:** back up the database (managed Postgres does this daily) and the files disk.
+- **Backups:** back up the database (Supabase and other managed Postgres do this daily) and the files disk.
 - **Logs:**
   - The logs are JSON in production.
   - Each model call is in the `usage_events` table.
@@ -116,6 +153,7 @@ For a universal build that runs on Intel and Apple Silicon: `npm run tauri build
 ### Before inviting people you don't know
 
 - [ ] `APP_SECRET` is set and the site is on HTTPS.
+- [ ] `INSTANCE_ADMINS` names you, so a stranger who signs up first can't set model keys.
 - [ ] `TRUST_PROXY` matches your setup (`1` behind one load balancer), so sign-in limits apply per real client.
 - [ ] Decide on `OPEN_SIGNUP`, and set a monthly budget per workspace (Settings → Models & spend).
 - [ ] Set `SMTP_URL` so "Forgot password?" can email links; without it, admins make reset links in Settings → People.

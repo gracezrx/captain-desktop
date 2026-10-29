@@ -32,7 +32,25 @@ function bool(name: string, fallback: boolean): boolean {
 const production = env('NODE_ENV') === 'production';
 const secret = env('APP_SECRET');
 if (production && secret.length < 32) {
-    throw new Error('Set APP_SECRET to a random string of at least 32 characters (it signs file links).');
+    throw new Error('Set APP_SECRET to a random string of at least 32 characters (it signs file links and protects saved model keys).');
+}
+
+// Without APP_SECRET outside production, keep a generated one in data/ so
+// saved model keys and file links survive a restart.
+function devSecret(): string {
+    const file = path.join(SERVER_DIR, 'data', '.app-secret');
+    try {
+        return fs.readFileSync(file, 'utf8').trim();
+    } catch {
+        const value = randomBytes(32).toString('hex');
+        try {
+            fs.mkdirSync(path.dirname(file), {recursive: true});
+            fs.writeFileSync(file, value, {mode: 0o600});
+        } catch {
+            // read-only disk: a fresh secret each start
+        }
+        return value;
+    }
 }
 
 export const config = {
@@ -43,7 +61,9 @@ export const config = {
     publicUrl: env('PUBLIC_URL', `http://localhost:${int('PORT', 8080)}`).replace(/\/+$/, ''),
     databaseUrl: env('DATABASE_URL', 'postgres://postgres@127.0.0.1:5432/captain'),
     databasePoolSize: int('DATABASE_POOL_SIZE', 10),
-    appSecret: secret || randomBytes(32).toString('hex'),
+    appSecret: secret || (production ? '' : devSecret()),
+    // Emails of people who run this server (set model keys) besides the first person to sign up.
+    instanceAdmins: env('INSTANCE_ADMINS').toLowerCase().split(',').map((s) => s.trim()).filter(Boolean),
     // Origins allowed to call the API from a browser (the Mac app's and the dev server's).
     corsOrigins: env('CORS_ORIGINS', 'tauri://localhost,http://tauri.localhost,http://localhost:1420,http://127.0.0.1:1420').split(',').map((s) => s.trim()).filter(Boolean),
     // Anyone can sign up and create a workspace, or only people with an invite link.

@@ -1,13 +1,13 @@
 // Workspace settings: your profile, people and invites, agents, models and spend.
 
-import {Bot, Check, Copy, Cpu, Plus, Users, UserRound} from 'lucide-react';
+import {AlertTriangle, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Plus, Users, UserRound} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 
 import {Avatar, PORTRAITS, portraitSrc} from '../components/Avatar';
 import {FieldLabel, ghostBtn, input, Modal, primaryBtn} from '../components/Modal';
 import {api, errorMessage} from '../lib/api';
 import {displayName, modelLabel, useStore} from '../lib/store';
-import type {Agent, AgentTool, ModelInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
+import type {Agent, AgentTool, ModelInfo, ProviderCheck, ProviderKeyInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
 
 type Tab = 'profile' | 'people' | 'agents' | 'models';
 
@@ -319,6 +319,7 @@ function AgentForm({agent, tools, onDone}: {agent: Agent | null; tools: AgentToo
 function Models({admin}: {admin: boolean}) {
     const ws = useStore((s) => s.workspace)!;
     const agents = useStore((s) => s.agents);
+    const runsServer = !!useStore((s) => s.me)?.instanceAdmin;
     const [models, setModels] = useState<ModelInfo[]>([]);
     const [demo, setDemo] = useState(false);
     const [usage, setUsage] = useState<UsageSummary | null>(null);
@@ -326,11 +327,15 @@ function Models({admin}: {admin: boolean}) {
     const [saved, setSaved] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    // Also refreshes the app's copy, so chats leave demo mode once a key is saved.
+    const loadModels = () => api.models(ws.id).then((r) => {
+        setModels(r.models);
+        setDemo(r.demoMode);
+        useStore.setState({models: r.models, demoMode: r.demoMode});
+    }).catch((e) => setError(errorMessage(e)));
+
     useEffect(() => {
-        api.models(ws.id).then((r) => {
-            setModels(r.models);
-            setDemo(r.demoMode);
-        }).catch((e) => setError(errorMessage(e)));
+        void loadModels();
         if (admin) {
             api.usage(ws.id).then(setUsage).catch(() => undefined);
         }
@@ -353,11 +358,12 @@ function Models({admin}: {admin: boolean}) {
 
     return (
         <div className='space-y-5'>
-            {demo && (
+            {demo && !runsServer && (
                 <div className='rounded-2xl bg-gold-tint px-4 py-3 text-[12.5px] text-gold-text'>
-                    <span className='font-bold'>Demo mode.</span> No model key is set on the server, so agents give sample answers. Add a key such as <code>OPENROUTER_API_KEY</code> to the server's environment and restart it.
+                    <span className='font-bold'>Demo mode.</span> No model key is set on this server yet, so agents give sample answers. Whoever runs the server can add one here.
                 </div>
             )}
+            {runsServer && <ModelKeys demo={demo} onChanged={() => void loadModels()}/>}
             {admin && usage && (
                 <section>
                     <h3 className='mb-2 text-[13px] font-extrabold text-ink'>This month</h3>
@@ -424,6 +430,173 @@ function Models({admin}: {admin: boolean}) {
                 </div>
             </section>
             {error && <p className='text-[12.5px] text-alert'>{error}</p>}
+        </div>
+    );
+}
+
+// ------------------------------------------------------------ model keys (people who run the server)
+
+function ModelKeys({demo, onChanged}: {demo: boolean; onChanged: () => void}) {
+    const [providers, setProviders] = useState<ProviderKeyInfo[] | null>(null);
+    const [more, setMore] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const load = () => api.providers().then(setProviders).catch((e) => setError(errorMessage(e)));
+    useEffect(() => {
+        void load();
+    }, []);
+    if (!providers) {
+        return error ? <p className='text-[12.5px] text-alert'>{error}</p> : null;
+    }
+    const [main, ...rest] = providers;
+    const inUse = rest.filter((p) => p.source || p.unreadable);
+    const others = rest.filter((p) => !p.source && !p.unreadable);
+    const changed = () => {
+        void load();
+        onChanged();
+    };
+    return (
+        <section className='rounded-2xl bg-surface p-4 ring-1 ring-line' style={{boxShadow: 'var(--shadow-control)'}}>
+            <div className='mb-1 flex items-center gap-2'>
+                <KeyRound size={15} className='text-accent-text'/>
+                <h3 className='text-[13px] font-extrabold text-ink'>Model keys</h3>
+                <span className='ml-auto text-[11.5px] text-muted'>Only people who run this server see this. It applies to every workspace here.</span>
+            </div>
+            <p className='mb-3 text-[12.5px] text-muted'>
+                {demo ? 'Agents are giving sample answers. ' : ''}One OpenRouter key turns on every model below; the router picks among them for each request. Keys are stored encrypted and never shown again.
+            </p>
+            <div className='space-y-2'>
+                {main && <ProviderRow p={main} open onChanged={changed}/>}
+                {inUse.map((p) => <ProviderRow key={p.id} p={p} onChanged={changed}/>)}
+            </div>
+            {others.length > 0 && (
+                <div className='mt-2'>
+                    <button type='button' onClick={() => setMore(!more)} className='inline-flex items-center gap-1 text-[12.5px] font-semibold text-muted hover:text-ink'>
+                        <ChevronDown size={14} className={more ? 'rotate-180' : ''}/> {more ? 'Fewer providers' : `Other providers (${others.length}): use their keys directly, tried before OpenRouter`}
+                    </button>
+                    {more && <div className='mt-2 space-y-2'>{others.map((p) => <ProviderRow key={p.id} p={p} onChanged={changed}/>)}</div>}
+                </div>
+            )}
+        </section>
+    );
+}
+
+function ProviderRow({p, open = false, onChanged}: {p: ProviderKeyInfo; open?: boolean; onChanged: () => void}) {
+    const [editing, setEditing] = useState(open && !p.source);
+    const [key, setKey] = useState('');
+    const [baseUrl, setBaseUrl] = useState(p.needsBaseUrl ? p.baseUrl ?? '' : '');
+    const [busy, setBusy] = useState<'save' | 'check' | 'remove' | null>(null);
+    const [result, setResult] = useState<ProviderCheck | null>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    const check = async () => {
+        setBusy('check');
+        setResult(null);
+        try {
+            setResult(await api.checkProvider(p.id));
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+    const save = async () => {
+        setBusy('save');
+        setError(null);
+        setResult(null);
+        try {
+            // The server tries the key before saving it, and turns down one the provider rejects.
+            const res = await api.saveProviderKey(p.id, key.trim(), p.needsBaseUrl ? baseUrl.trim() : undefined);
+            setKey('');
+            setEditing(false);
+            setResult(res.check);
+            onChanged();
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+    const remove = async () => {
+        setBusy('remove');
+        setError(null);
+        setResult(null);
+        try {
+            await api.removeProviderKey(p.id);
+            onChanged();
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    const status = p.unreadable ?
+        <span className='inline-flex items-center gap-1 text-alert'><AlertTriangle size={12}/> Saved key can't be read</span> :
+        p.source === 'settings' ? <span className='inline-flex items-center gap-1.5 text-ink'><span className='size-1.5 rounded-full bg-emerald-500'/>In use · ends in {p.last4}</span> :
+            p.source === 'environment' ? <span className='inline-flex items-center gap-1.5 text-ink'><span className='size-1.5 rounded-full bg-emerald-500'/>From the server's environment · ends in {p.last4}</span> :
+                <span className='text-muted'>Not set</span>;
+
+    return (
+        <div className='rounded-xl bg-bg-subtle px-3 py-2.5 ring-1 ring-line/70'>
+            <div className='flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]'>
+                <span className='text-[13px] font-bold text-ink'>{p.label}</span>
+                {p.recommended && <span className='rounded-full bg-tint px-2 py-0.5 text-[10.5px] font-bold text-accent-text'>Recommended</span>}
+                <span className='text-muted'>· {p.models} {p.models === 1 ? 'model' : 'models'}</span>
+                <span className='ml-auto'>{status}</span>
+            </div>
+            {p.unreadable && (
+                <p className='mt-1 text-[12px] text-muted'>The server's APP_SECRET changed since this key was saved. Paste the key again.</p>
+            )}
+            {p.source === 'environment' && !editing && (
+                <p className='mt-1 text-[12px] text-muted'>A key saved here takes the place of the server's own.</p>
+            )}
+            {editing ? (
+                <form
+                    className='mt-2 space-y-2'
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        void save();
+                    }}
+                >
+                    {p.needsBaseUrl && (
+                        <input className={input} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder='Gateway address, such as https://gateway.example.com/v1' spellCheck={false}/>
+                    )}
+                    <div className='flex gap-2'>
+                        <input
+                            className={`${input} font-mono text-[12.5px]`}
+                            type='password'
+                            value={key}
+                            onChange={(e) => setKey(e.target.value)}
+                            placeholder={p.id === 'openrouter' ? 'sk-or-v1-…' : `Paste your ${p.label} key`}
+                            autoComplete='off'
+                            spellCheck={false}
+                            autoFocus={!open}
+                            aria-label={`${p.label} key`}
+                        />
+                        <button type='submit' className={primaryBtn} disabled={!key.trim() || busy !== null}>{busy === 'save' ? 'Trying it…' : 'Save'}</button>
+                        {(p.source || p.unreadable) && <button type='button' className={ghostBtn} onClick={() => setEditing(false)}>Cancel</button>}
+                    </div>
+                    {p.keysUrl && (
+                        <a href={p.keysUrl} target='_blank' rel='noreferrer' className='inline-flex items-center gap-1 text-[12px] font-semibold text-accent-text hover:underline'>
+                            Get a key from {p.label} <ExternalLink size={11}/>
+                        </a>
+                    )}
+                </form>
+            ) : (
+                <div className='mt-2 flex flex-wrap gap-2'>
+                    <button type='button' className={ghostBtn} onClick={() => setEditing(true)}>{p.source || p.unreadable ? 'Replace key' : 'Add key'}</button>
+                    {p.source && <button type='button' className={ghostBtn} disabled={busy !== null} onClick={() => void check()}>{busy === 'check' ? 'Checking…' : 'Check'}</button>}
+                    {(p.source === 'settings' || p.unreadable) && <button type='button' className={ghostBtn} disabled={busy !== null} onClick={() => void remove()}>{busy === 'remove' ? 'Removing…' : 'Remove'}</button>}
+                </div>
+            )}
+            {busy === 'check' && !result && <p className='mt-2 text-[12px] text-muted'>Sending a tiny test request…</p>}
+            {result && (
+                <p className={`mt-2 inline-flex items-start gap-1.5 text-[12px] ${result.ok ? 'text-ink' : 'text-alert'}`}>
+                    {result.ok ? <Check size={13} className='mt-px shrink-0 text-emerald-600'/> : <AlertTriangle size={13} className='mt-px shrink-0'/>}
+                    <span>{result.message}{result.ok && result.latencyMs ? ` (${(result.latencyMs / 1000).toFixed(1)}s)` : ''}</span>
+                </p>
+            )}
+            {error && <p className='mt-2 text-[12px] text-alert'>{error}</p>}
         </div>
     );
 }

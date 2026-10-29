@@ -10,6 +10,8 @@ import path from 'node:path';
 import {config} from '../config.js';
 import {log} from '../util/log.js';
 
+import type postgres from 'postgres';
+
 import type {Sql} from './index.js';
 
 export const MIGRATIONS_DIR = path.join(config.serverDir, 'src', 'db', 'migrations');
@@ -25,6 +27,20 @@ export function listMigrations(dir = MIGRATIONS_DIR): Migration[] {
             const sql = fs.readFileSync(path.join(dir, file), 'utf8');
             return {version: Number(file.slice(0, 4)), name: file.replace(/\.sql$/, ''), sql, checksum: createHash('sha256').update(sql).digest('hex')};
         });
+}
+
+// On Supabase, every table in the "public" schema is also served by its Data
+// API to anyone holding the project's public key. Row-level security with no
+// policies closes that door. This server connects as the tables' owner, which
+// row-level security doesn't apply to, so nothing changes for it. Runs after
+// every migration so new tables are covered too; harmless on plain Postgres.
+async function lockPublicTables(db: postgres.ReservedSql<Record<string, unknown>>): Promise<void> {
+    await db.unsafe(`
+        do $$ declare t record; begin
+            for t in select tablename from pg_tables where schemaname = 'public' and not rowsecurity loop
+                execute format('alter table public.%I enable row level security', t.tablename);
+            end loop;
+        end $$`);
 }
 
 export async function migrate(sql: Sql, dir = MIGRATIONS_DIR): Promise<number> {
@@ -60,6 +76,7 @@ export async function migrate(sql: Sql, dir = MIGRATIONS_DIR): Promise<number> {
             log.info({migration: m.name}, 'applied migration');
             count++;
         }
+        await lockPublicTables(reserved);
         return count;
     } finally {
         await reserved`select pg_advisory_unlock(${LOCK_KEY})`.catch(() => undefined);

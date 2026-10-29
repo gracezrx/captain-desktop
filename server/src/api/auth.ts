@@ -10,7 +10,7 @@ import {mailEnabled} from '../util/mail.js';
 import {config} from '../config.js';
 import {tx} from '../db/index.js';
 import {getInviteByHash, inviteUsable} from '../store/workspaces.js';
-import {getUsers, toUser, updateUser} from '../store/users.js';
+import {claimInstanceAdmin, getUsers, toUser, updateUser} from '../store/users.js';
 import {sha256} from '../util/crypto.js';
 import {forbidden} from '../util/errors.js';
 
@@ -43,7 +43,11 @@ export function authRoutes(app: FastifyInstance, api: Api): void {
                 throw forbidden('This server is invite-only. Ask for an invite link.');
             }
         }
-        const user = await tx(ctx.sql, (t) => signupUser(t, body));
+        let user = await tx(ctx.sql, (t) => signupUser(t, body));
+        // With INSTANCE_ADMINS set, only those people run the server.
+        if (!config.instanceAdmins.length && await claimInstanceAdmin(ctx.sql, user.id)) {
+            user = {...user, instanceAdmin: true};
+        }
         if (body.invite) {
             await acceptInvite(ctx, user, body.invite);
         } else if (body.workspaceName?.trim()) {

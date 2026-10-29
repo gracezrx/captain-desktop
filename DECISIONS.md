@@ -13,6 +13,7 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | A3 | **TypeScript on Node 22 (Fastify, postgres.js, zod)**, not Go like Mattermost. | The server and app share one type file (`server/src/shared/types.ts`), and one language covers the whole stack. | — |
 | A4 | **One repo** with `server/` and `desktop/`. The server also serves the web app at `/`, so testers can use a browser and skip the install. | Shipping the client and server together prevents version mismatch. | `WEB_DIST` points at another build, or leave it empty for API only. |
 | A5 | Uploads are stored **on local disk** (a mounted volume). The storage interface is small, so S3 can slot in later. | One less service to set up. | `server/src/files/storage.ts` |
+| A6 | **Supabase is used as plain Postgres**, through its session pooler. The server keeps its own accounts and doesn't use Supabase Auth, Storage or client keys. It turns on row-level security (with no policies) on all its tables, so Supabase's public Data API can't read them. | One database to manage, and it works the same on any Postgres. | `server/src/db/migrate.ts`, [DEPLOY.md](docs/DEPLOY.md#with-supabase-as-the-database) |
 
 ## Accounts and workspaces
 
@@ -26,6 +27,7 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | B5b | Signing out or changing your password closes that session's open connections right away on the same server, and within 30 seconds on other servers. | `realtime/hub.ts` |
 | B6 | **Password reset**, two ways: "Forgot password?" emails a link that works for an hour (when `SMTP_URL` is set), or an admin makes a one-time link in Settings → People that works for 24 hours. Only owners can reset admins' and owners' passwords. Using a link signs the person out everywhere else. | `app/passwords.ts` |
 | B7 | **Not built yet:** <ul><li>email verification</li><li>SSO</li><li>account deletion</li></ul> | Add email verification before a wide open launch. |
+| B8 ★ | **Who runs the server:** the people listed in `INSTANCE_ADMINS`, or else the first person to sign up. Only they set model keys, which every workspace on the server shares. Workspace owners and admins still set each workspace's budget. | `INSTANCE_ADMINS`; `store/users.ts` → `isInstanceAdmin` |
 
 ## Chat
 
@@ -66,6 +68,7 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | E4 | **Fallback:** <ul><li>The router tries the tier's models by priority, then lower tiers, then higher ones.</li><li>It needs a vision model when images are attached, and tool support when tools are used.</li><li>A model and provider pair that fails 3 times is skipped for 2 minutes, tracked per instance.</li></ul> | `llm/router.ts` |
 | E5 | **Spend:** <ul><li>Each workspace can set a monthly budget, reset on the 1st (UTC). There's no budget by default.</li><li>Past the budget, agents stop with a clear message and no model is called.</li><li>Only admins see spend.</li><li>Every call is recorded with its tokens, cost and latency.</li></ul> | Settings → Models & spend |
 | E6 | With no model key at all, a **demo model** answers, marked as demo. You can click through plans, approvals and documents before adding keys. | `LLM_DEMO_FALLBACK=false` turns it off. |
+| E7 ★ | **Model keys are pasted in the app** (Settings → Models & spend), with OpenRouter first and the other providers folded away. <ul><li>Saving sends a tiny request to the provider's cheapest model; a key the provider rejects isn't saved.</li><li>Keys are encrypted with `APP_SECRET` and only their last four characters are shown.</li><li>A key saved in Settings wins over the environment variable.</li><li>Each change reaches every instance within a second.</li></ul> Keys are per server, not per workspace. | `server/src/app/admin.ts`, `server/src/llm/keys.ts`. Per-workspace keys (each team pays its own provider) would be a follow-up. |
 
 ## The app
 

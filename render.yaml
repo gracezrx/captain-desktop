@@ -1,5 +1,7 @@
 # Render Blueprint: the Captain server (Docker) with a persistent disk for
-# uploads, and a managed Postgres. Set the secret values in the dashboard.
+# uploads. The database is yours (Supabase or any Postgres 14+): paste its
+# address as DATABASE_URL when Render asks. Model keys can be pasted in the
+# app afterwards (Settings → Models & spend), so they're optional here.
 services:
   - type: web
     name: captain
@@ -13,11 +15,11 @@ services:
       sizeGB: 10
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: captain-db
-          property: connectionString
+        sync: false # Supabase: Connect → Session pooler (port 5432)
       - key: APP_SECRET
-        generateValue: true
+        generateValue: true # also encrypts saved model keys: don't change it later
+      - key: INSTANCE_ADMINS
+        sync: false # your email: you run the server and set model keys
       - key: PUBLIC_URL
         sync: false # e.g. https://captain.example.com (used in invite links)
       - key: CORS_ORIGINS
@@ -39,7 +41,3 @@ services:
       - key: MAIL_FROM
         sync: false
 
-databases:
-  - name: captain-db
-    plan: basic-256mb
-    databaseName: captain

@@ -1,6 +1,7 @@
 import type {Sql} from '../db/index.js';
 import type {Storage} from '../files/storage.js';
 import type {JobQueue} from '../jobs/queue.js';
+import type {KeyStore} from '../llm/keys.js';
 import type {Router} from '../llm/router.js';
 import type {Hub} from '../realtime/hub.js';
 
@@ -14,6 +15,7 @@ export type Ctx = {
     storage: Storage;
     jobs: JobQueue;
     router: Router;
+    keys: KeyStore;
     hooks: Hooks;
 };
 

@@ -74,6 +74,7 @@ export function client(base: string, token = '') {
         get: <T = any>(p: string) => call<T>('GET', p),
         post: <T = any>(p: string, body: unknown = {}) => call<T>('POST', p, body),
         patch: <T = any>(p: string, body: unknown) => call<T>('PATCH', p, body),
+        put: <T = any>(p: string, body: unknown) => call<T>('PUT', p, body),
         del: <T = any>(p: string) => call<T>('DELETE', p),
     };
 }
@@ -138,7 +139,7 @@ export async function socket(base: string, token: string, extra: {connectionId?:
 // ------------------------------------------------------------ fake model provider
 
 export type Scripted = {text?: string; toolCalls?: {name: string; args: Record<string, unknown>}[]; status?: number; delayMs?: number};
-export type FakeRequest = {model: string; messages: {role: string; content: unknown; tool_calls?: unknown}[]; tools?: {function: {name: string}}[]; stream?: boolean};
+export type FakeRequest = {model: string; messages: {role: string; content: unknown; tool_calls?: unknown}[]; tools?: {function: {name: string}}[]; stream?: boolean; auth?: string};
 
 export async function fakeProvider(script: (req: FakeRequest) => Scripted): Promise<{url: string; requests: FakeRequest[]; close: () => Promise<void>}> {
     const requests: FakeRequest[] = [];
@@ -146,7 +147,7 @@ export async function fakeProvider(script: (req: FakeRequest) => Scripted): Prom
         let raw = '';
         req.on('data', (c) => (raw += c));
         req.on('end', async () => {
-            const body = JSON.parse(raw) as FakeRequest;
+            const body = {...(JSON.parse(raw) as FakeRequest), auth: req.headers.authorization};
             requests.push(body);
             const s = script(body);
             if (s.delayMs) {

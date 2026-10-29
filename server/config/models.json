@@ -1,14 +1,14 @@
 {
   "$comment": "Model catalog for the router. Mirrors Captain's router table (ids, tiers, priorities, prices per 1M tokens, provider routes). A model is usable when at least one of its routes' providers has an API key set. Routes are tried in order; models in a tier are tried by priority (higher first). Edit freely: add a model, change priorities, or pin agents to models.",
   "providers": {
-    "openrouter": {"label": "OpenRouter", "baseUrl": "https://openrouter.ai/api/v1", "apiKeyEnv": "OPENROUTER_API_KEY", "headers": {"HTTP-Referer": "https://captainspace.ai", "X-Title": "Captain"}},
-    "openai": {"label": "OpenAI", "baseUrl": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY"},
-    "anthropic": {"label": "Anthropic", "baseUrl": "https://api.anthropic.com/v1", "apiKeyEnv": "ANTHROPIC_API_KEY"},
-    "google": {"label": "Google", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKeyEnv": "GOOGLE_API_KEY"},
-    "deepseek": {"label": "DeepSeek", "baseUrl": "https://api.deepseek.com", "apiKeyEnv": "DEEPSEEK_API_KEY"},
+    "openrouter": {"label": "OpenRouter", "baseUrl": "https://openrouter.ai/api/v1", "apiKeyEnv": "OPENROUTER_API_KEY", "keysUrl": "https://openrouter.ai/keys", "headers": {"HTTP-Referer": "https://captainspace.ai", "X-Title": "Captain"}},
+    "openai": {"label": "OpenAI", "baseUrl": "https://api.openai.com/v1", "apiKeyEnv": "OPENAI_API_KEY", "keysUrl": "https://platform.openai.com/api-keys"},
+    "anthropic": {"label": "Anthropic", "baseUrl": "https://api.anthropic.com/v1", "apiKeyEnv": "ANTHROPIC_API_KEY", "keysUrl": "https://console.anthropic.com/settings/keys"},
+    "google": {"label": "Google", "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai", "apiKeyEnv": "GOOGLE_API_KEY", "keysUrl": "https://aistudio.google.com/apikey"},
+    "deepseek": {"label": "DeepSeek", "baseUrl": "https://api.deepseek.com", "apiKeyEnv": "DEEPSEEK_API_KEY", "keysUrl": "https://platform.deepseek.com/api_keys"},
     "dashscope_intl": {"label": "Alibaba DashScope", "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "apiKeyEnv": "DASHSCOPE_API_KEY"},
     "siliconflow": {"label": "SiliconFlow", "baseUrl": "https://api.siliconflow.com/v1", "apiKeyEnv": "SILICONFLOW_API_KEY"},
-    "moonshot": {"label": "Moonshot", "baseUrl": "https://api.moonshot.ai/v1", "apiKeyEnv": "MOONSHOT_API_KEY"},
+    "moonshot": {"label": "Moonshot", "baseUrl": "https://api.moonshot.ai/v1", "apiKeyEnv": "MOONSHOT_API_KEY", "keysUrl": "https://platform.moonshot.ai/console/api-keys"},
     "gateway": {"label": "Custom OpenAI-compatible gateway", "baseUrlEnv": "LLM_GATEWAY_URL", "apiKeyEnv": "LLM_GATEWAY_KEY"}
   },
   "models": [

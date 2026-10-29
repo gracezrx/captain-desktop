@@ -20,6 +20,7 @@ export type User = {
     agentId: ID | null;
     portrait: string | null; // agent portrait name, e.g. "fox"
     createdAt: Ms;
+    instanceAdmin?: boolean; // only on your own profile: you run this server (model keys)
 };
 
 export type Workspace = {
@@ -155,6 +156,23 @@ export type ModelInfo = {
     healthy: boolean;
     lastError: string | null;
 };
+
+// A model provider as the person running the server sees it (Settings → Models).
+export type ProviderKeyInfo = {
+    id: string;
+    label: string;
+    recommended: boolean; // one key that covers every model
+    source: 'settings' | 'environment' | null; // where the key in use comes from
+    last4: string | null;
+    unreadable: boolean; // a saved key that can't be decrypted (APP_SECRET changed)
+    needsBaseUrl: boolean; // a custom gateway: needs its address too
+    baseUrl: string | null;
+    keysUrl: string | null; // where to get a key
+    models: number; // models this key can serve
+    updatedAt: Ms | null;
+};
+
+export type ProviderCheck = {ok: boolean; message: string; modelId?: string; latencyMs?: number};
 
 export type UsageSummary = {
     periodStart: Ms;

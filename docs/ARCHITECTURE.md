@@ -103,7 +103,7 @@ flowchart TD
 
 1. **Tier.** Each call gets a tier: easy, balanced or hard. An agent's own tier is the floor (Analyst is "hard"), and "auto" lets the request decide. Heuristics in `llm/classify.ts` raise the tier for long or demanding requests. A cheap-model classifier is optional.
 2. **Candidates.** The router lists the tier's models by priority, then lower tiers, then higher ones. It keeps only models that can see images when images are attached, and that support tools when tools are offered. A model pinned on the agent goes first.
-3. **Routes.** Each model has provider routes in order: the vendor, then OpenRouter, then a gateway. A route is used only if its provider's key is set. A model and provider pair that fails 3 times is skipped for 2 minutes.
+3. **Routes.** Each model has provider routes in order: the vendor, then OpenRouter, then a gateway. A route is used only if its provider has a key. Keys come from Settings (`llm/keys.ts`: encrypted in `provider_keys`, reloaded on every instance through `NOTIFY captain_keys`) or else from the environment. A model and provider pair that fails 3 times is skipped for 2 minutes; changing a provider's key clears that.
 4. **Ledger.** Every attempt is written to `usage_events` with tokens, cost, latency and the run and step. If a workspace is over its monthly budget, the call is refused with a 402 before any model is called.
 5. **Demo.** With no key configured, a built-in demo model answers. It follows the same protocol, including streaming, tool calls and plan JSON.
 
@@ -111,13 +111,15 @@ All providers are called with the OpenAI-compatible `/chat/completions` format a
 
 ## Data
 
-Tables, all in `0001_init.sql`:
+Tables, created by the numbered files in `src/db/migrations/`:
 
-- people and access: `users`, `sessions`, `workspaces`, `workspace_members`, `invites`
+- people and access: `users` (`instance_admin` marks who runs the server), `sessions`, `password_resets`, `workspaces`, `workspace_members`, `invites`
 - chat: `channels`, `channel_members`, `posts` (with a generated full-text `search` column), `reactions`, `files`
 - agents: `agents`, `runs`, `run_steps`, `approvals`
-- model use: `usage_events`
+- models: `usage_events`, `provider_keys` (encrypted keys pasted in Settings)
 - infrastructure: `jobs`, `realtime_outbox`, `audit_log`
+
+After migrating, the server turns on row-level security for every table in `public`, with no policies. On Supabase this keeps the Data API from serving them; the server itself connects as the tables' owner and isn't affected.
 
 Special message types:
 

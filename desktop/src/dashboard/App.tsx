@@ -85,12 +85,13 @@ export function App() {
         <div className='flex h-full'>
             <Sidebar onSignOut={() => void endSession()} onAction={setDialog}/>
             <main className='wash flex min-w-0 flex-1 flex-col'>
-                <ChatView channelId={activeChannelId} onInvite={() => setDialog('invite')}/>
+                <ChatView channelId={activeChannelId} onInvite={() => setDialog('invite')} onModels={() => setDialog('models')}/>
             </main>
             {dialog === 'new-channel' && <NewChannel onClose={() => setDialog(null)}/>}
             {dialog === 'browse' && <BrowseChannels onClose={() => setDialog(null)}/>}
             {dialog === 'new-dm' && <NewMessage onClose={() => setDialog(null)}/>}
             {(dialog === 'settings' || dialog === 'invite') && <Settings initial='people' onClose={() => setDialog(null)}/>}
+            {dialog === 'models' && <Settings initial='models' onClose={() => setDialog(null)}/>}
             {dialog === 'new-workspace' && <CreateWorkspace onClose={() => setDialog(null)}/>}
             {dialog === 'search' && (
                 <SearchMessages

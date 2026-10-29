@@ -1,4 +1,4 @@
-import {createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual} from 'node:crypto';
+import {createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scrypt as scryptCb, timingSafeEqual} from 'node:crypto';
 import {promisify} from 'node:util';
 
 import {config} from '../config.js';
@@ -30,6 +30,33 @@ export function newToken(bytes = 32): string {
 
 export function sha256(value: string): string {
     return createHash('sha256').update(value).digest('hex');
+}
+
+// Secrets kept in the database (model provider keys): AES-256-GCM with a key
+// derived from APP_SECRET. Changing APP_SECRET makes them unreadable.
+function secretKey(): Buffer {
+    return createHash('sha256').update(`captain:stored-secrets:${config.appSecret}`).digest();
+}
+
+export function encryptSecret(plain: string): string {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', secretKey(), iv);
+    const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+    return ['v1', iv.toString('base64'), cipher.getAuthTag().toString('base64'), data.toString('base64')].join(':');
+}
+
+export function decryptSecret(blob: string): string | null {
+    const [v, iv, tag, data] = blob.split(':');
+    if (v !== 'v1' || !iv || !tag || !data) {
+        return null;
+    }
+    try {
+        const decipher = createDecipheriv('aes-256-gcm', secretKey(), Buffer.from(iv, 'base64'));
+        decipher.setAuthTag(Buffer.from(tag, 'base64'));
+        return Buffer.concat([decipher.update(Buffer.from(data, 'base64')), decipher.final()]).toString('utf8');
+    } catch {
+        return null;
+    }
 }
 
 // Signed, expiring links (file downloads that work in <img src>).

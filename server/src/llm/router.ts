@@ -48,6 +48,15 @@ export class Router {
         this.catalog = catalog;
     }
 
+    // A provider's key changed: give its routes a fresh start.
+    resetProviders(providerIds: string[]): void {
+        for (const key of [...this.health.keys()]) {
+            if (providerIds.some((id) => key.endsWith(`|${id}`))) {
+                this.health.delete(key);
+            }
+        }
+    }
+
     get demoMode(): boolean {
         return !this.catalog.anyConfigured() && config.llm.demoWhenUnconfigured;
     }

@@ -12,6 +12,7 @@ import Fastify, {type FastifyInstance, LogController} from 'fastify';
 import {ZodError} from 'zod';
 
 import type {Orchestrator} from './agents/orchestrator.js';
+import {adminRoutes} from './api/admin.js';
 import {authRoutes} from './api/auth.js';
 import {chatRoutes} from './api/chat.js';
 import {RateLimiter} from './api/ratelimit.js';
@@ -138,6 +139,7 @@ export async function buildServer(api: Api): Promise<FastifyInstance> {
         authRoutes(v1, api);
         workspaceRoutes(v1, api);
         chatRoutes(v1, api);
+        adminRoutes(v1, api);
 
         v1.get('/websocket', {websocket: true, config: {public: true}}, (socket) => {
             ctx.hub.accept(socket);

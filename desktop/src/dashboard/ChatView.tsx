@@ -1,4 +1,4 @@
-import {AtSign, Command, LogOut, MousePointerClick, Sparkles, UserPlus, X} from 'lucide-react';
+import {AtSign, Command, KeyRound, LogOut, MousePointerClick, Sparkles, UserPlus, X} from 'lucide-react';
 import {Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 
 import {ChatIcon} from '../components/ChatIcon';
@@ -11,11 +11,11 @@ import {mentionsAgent} from '../lib/send';
 import {agentForUser, channelTitle, displayName, isAgentChannel, otherUserId, useStore} from '../lib/store';
 import type {ClientPost} from '../lib/types';
 
-export function ChatView({channelId, onInvite}: {channelId: string | null; onInvite: () => void}) {
+export function ChatView({channelId, onInvite, onModels}: {channelId: string | null; onInvite: () => void; onModels: () => void}) {
     if (!channelId) {
-        return <Home onInvite={onInvite}/>;
+        return <Home onInvite={onInvite} onModels={onModels}/>;
     }
-    return <Chat key={channelId} channelId={channelId}/>;
+    return <Chat key={channelId} channelId={channelId} onModels={onModels}/>;
 }
 
 function scrollToPost(id: string) {
@@ -27,7 +27,7 @@ function scrollToPost(id: string) {
     }
 }
 
-function Chat({channelId}: {channelId: string}) {
+function Chat({channelId, onModels}: {channelId: string; onModels: () => void}) {
     const channel = useStore((s) => s.channels[channelId]);
     const me = useStore((s) => s.me);
     const users = useStore((s) => s.users);
@@ -42,7 +42,6 @@ function Chat({channelId}: {channelId: string}) {
     const threadRootId = useStore((s) => s.threadRootId);
     const openThread = useStore((s) => s.openThread);
     const demoMode = useStore((s) => s.demoMode);
-    const workspace = useStore((s) => s.workspace);
     const scroller = useRef<HTMLDivElement>(null);
     const nearBottom = useRef(true);
     const [lightbox, setLightbox] = useState<string | null>(null);
@@ -88,7 +87,6 @@ function Chat({channelId}: {channelId: string}) {
     const agent = agentForUser(agents, agentUser?.id);
     const subtitle = agent ? agent.description || 'Agent' : channel.purpose || (channel.type === 'D' ? 'Direct message' : channel.type === 'P' ? 'Private channel' : 'Channel');
     const isChannel = channel.type === 'O' || channel.type === 'P';
-    const admin = workspace?.role === 'owner' || workspace?.role === 'admin';
 
     return (
         <div className='flex min-h-0 min-w-0 flex-1'>
@@ -102,8 +100,11 @@ function Chat({channelId}: {channelId: string}) {
                     {isChannel && <ChannelMenu channelId={channelId} general={channel.name === 'general'}/>}
                 </header>
                 {demoMode && agent && (
-                    <div className='border-b border-line/70 bg-gold-tint px-6 py-1.5 text-[12px] text-gold-text'>
-                        Demo mode: agents give sample answers until a model key is added on the server{admin ? ' (Settings → Models & spend)' : ''}.
+                    <div className='flex items-center gap-3 border-b border-line/70 bg-gold-tint px-6 py-1.5 text-[12px] text-gold-text'>
+                        <span className='min-w-0 flex-1'>Demo mode: agents give sample answers until someone who runs this server adds a model key.</span>
+                        {me?.instanceAdmin && (
+                            <button type='button' onClick={onModels} className='shrink-0 font-bold underline underline-offset-2'>Add a key</button>
+                        )}
                     </div>
                 )}
                 <div
@@ -306,8 +307,9 @@ function ThreadPane({rootId, onClose, onOpenImage}: {rootId: string; onClose: ()
     );
 }
 
-function Home({onInvite}: {onInvite: () => void}) {
+function Home({onInvite, onModels}: {onInvite: () => void; onModels: () => void}) {
     const me = useStore((s) => s.me);
+    const demoMode = useStore((s) => s.demoMode);
     const agents = useStore((s) => s.agents);
     const workspace = useStore((s) => s.workspace);
     const addChannel = useStore((s) => s.addChannel);
@@ -338,6 +340,20 @@ function Home({onInvite}: {onInvite: () => void}) {
                         </button>
                     )}
                 </div>
+                {demoMode && (
+                    <div className='mt-7 flex items-center gap-3 rounded-2xl bg-gold-tint p-3.5 text-left ring-1 ring-gold/30'>
+                        <span className='grid size-8 shrink-0 place-items-center rounded-xl bg-surface text-gold-text'><KeyRound size={16}/></span>
+                        <span className='min-w-0 flex-1'>
+                            <span className='block text-[13.5px] font-bold text-ink'>{me?.instanceAdmin ? 'Connect a model' : 'Agents are in demo mode'}</span>
+                            <span className='block text-[12.5px] text-gold-text'>
+                                {me?.instanceAdmin ? 'Paste an OpenRouter key and every agent starts answering for real.' : 'They give sample answers until whoever runs this server adds a model key.'}
+                            </span>
+                        </span>
+                        {me?.instanceAdmin && (
+                            <button type='button' onClick={onModels} className='inline-flex h-9 shrink-0 items-center rounded-full bg-accent px-4 text-[13px] font-bold text-on-accent'>Add key</button>
+                        )}
+                    </div>
+                )}
                 <div className='mt-8 grid gap-2.5 text-left'>
                     <Tip icon={<Sparkles size={16}/>} title='@captain plans the work' text='Ask for something big. Captain splits it across Researcher, Analyst, Writer and Designer, picks a model for each step, and posts one answer.'/>
                     <Tip icon={<MousePointerClick size={16}/>} title='Nothing leaves without a yes' text='Emails and other outside actions wait for your approval: a card in the chat and a banner on your Mac.'/>

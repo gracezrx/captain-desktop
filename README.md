@@ -53,6 +53,7 @@ It comes in three parts:
   - Three difficulty tiers, with priorities, vision and tool support.
   - Several provider routes per model, falling back automatically, and skipping models that keep failing.
   - Monthly budgets and a cost ledger per workspace.
+  - Model keys pasted in Settings by whoever runs the server, stored encrypted and tried before they're saved.
 - **Mac-only features**
   - menu bar panel and global shortcut
   - screen and region snapshots
@@ -68,9 +69,11 @@ cd server && npm install && npm run dev        # API on :8080, migrations run au
 cd desktop && npm install && npm run dev       # app on http://localhost:1420
 ```
 
-Create an account in the browser. With no model key set, agents answer in **demo mode**, so plans, approvals and documents still work. For real answers, put `OPENROUTER_API_KEY=…` (or any provider key) in `server/.env` and restart.
+Create an account in the browser. With no model key set, agents answer in **demo mode**, so plans, approvals and documents still work. For real answers, paste an OpenRouter key in **Settings → Models & spend**: the first account on a server runs it and sees that card. `OPENROUTER_API_KEY` in `server/.env` works too.
 
-- **Deploying**: Docker Compose, Render, all settings, and building and signing the Mac app are in [docs/DEPLOY.md](docs/DEPLOY.md).
+The server runs on any Postgres 14 or newer, including Supabase ([docs/DEPLOY.md](docs/DEPLOY.md#with-supabase-as-the-database)).
+
+- **Deploying**: Supabase, Docker Compose, Render, model keys, all settings, and building and signing the Mac app are in [docs/DEPLOY.md](docs/DEPLOY.md).
 - **How it's built**: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Product choices to review**: [DECISIONS.md](DECISIONS.md).
 
@@ -90,7 +93,7 @@ Create an account in the browser. With no model key set, agents answer in **demo
 cd server && npm test     # needs a captain_test database
 ```
 
-The 49 tests cover:
+The 60 tests cover:
 
 - accounts, invites, roles and password resets
 - private channels and DMs
@@ -100,6 +103,8 @@ The 49 tests cover:
 - routing by tier, fallback and the circuit breaker
 - streaming and tool calls
 - vision routing, budgets
+- model keys: who may set them, encryption, a rejected key not being saved, Settings winning over the environment, every instance picking up a change
+- database addresses (TLS for Supabase, the transaction pooler warning) and row-level security on every table
 - the job queue's retries and recovery
 - security: what agents may quote where, links that need approval, blocked private addresses, approvals that run once, revoked invites and sessions, forged client addresses
 

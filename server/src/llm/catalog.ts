@@ -1,14 +1,17 @@
 // The model catalog: providers (where to send a request, with which key) and
 // models (tier, priority, price, capabilities, and the provider routes that
-// serve them). Loaded from config/models.json; keys come from environment
-// variables, so the same file works everywhere.
+// serve them). Loaded from config/models.json. Keys come from Settings (saved
+// in the database, see keys.ts) or from environment variables, so the same
+// file works everywhere.
 
 import fs from 'node:fs';
 
 import {config} from '../config.js';
 import type {ModelInfo, Tier} from '../shared/types.js';
 
-export type ProviderCfg = {label: string; baseUrl?: string; baseUrlEnv?: string; apiKeyEnv: string; headers?: Record<string, string>};
+import type {KeyStore} from './keys.js';
+
+export type ProviderCfg = {label: string; baseUrl?: string; baseUrlEnv?: string; apiKeyEnv: string; headers?: Record<string, string>; keysUrl?: string};
 export type ModelCfg = {
     id: string;
     label: string;
@@ -32,6 +35,7 @@ export const DEMO_MODEL: ModelCfg = {
 export class Catalog {
     readonly providers: Record<string, ProviderCfg>;
     readonly models: ModelCfg[];
+    private keys: KeyStore | null = null;
 
     constructor(data: {providers: Record<string, ProviderCfg>; models: ModelCfg[]}) {
         this.providers = data.providers;
@@ -43,15 +47,36 @@ export class Catalog {
         return new Catalog({providers: raw.providers ?? {}, models: raw.models ?? []});
     }
 
-    // Provider credentials, read on each call so a key added to the
-    // environment is used on the next restart without touching the file.
-    private endpoint(providerId: string): {baseUrl: string; apiKey: string; headers?: Record<string, string>} | null {
+    useKeys(keys: KeyStore): void {
+        this.keys = keys;
+    }
+
+    private envKey(p: ProviderCfg): string {
+        return (process.env[p.apiKeyEnv] ?? '').trim();
+    }
+
+    // Where a provider's key comes from: Settings first, then the environment.
+    keySource(providerId: string): 'settings' | 'environment' | null {
         const p = this.providers[providerId];
         if (!p) {
             return null;
         }
-        const apiKey = (process.env[p.apiKeyEnv] ?? '').trim();
-        const baseUrl = (p.baseUrl ?? (p.baseUrlEnv ? process.env[p.baseUrlEnv] ?? '' : '')).trim();
+        if (this.keys?.get(providerId)) {
+            return 'settings';
+        }
+        return this.envKey(p) ? 'environment' : null;
+    }
+
+    // Provider credentials, read on each call so a key saved in Settings is
+    // used right away.
+    endpoint(providerId: string): {baseUrl: string; apiKey: string; headers?: Record<string, string>} | null {
+        const p = this.providers[providerId];
+        if (!p) {
+            return null;
+        }
+        const stored = this.keys?.get(providerId);
+        const apiKey = stored?.apiKey ?? this.envKey(p);
+        const baseUrl = (stored?.baseUrl || p.baseUrl || (p.baseUrlEnv ? process.env[p.baseUrlEnv] ?? '' : '')).trim();
         return apiKey && baseUrl ? {baseUrl, apiKey, headers: p.headers} : null;
     }
 

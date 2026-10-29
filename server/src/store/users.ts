@@ -1,4 +1,5 @@
-import type {Db} from '../db/index.js';
+import {config} from '../config.js';
+import type {Db, Sql} from '../db/index.js';
 import type {User} from '../shared/types.js';
 import {newId, now} from '../util/ids.js';
 
@@ -9,6 +10,7 @@ export type UserRow = {
     displayName: string;
     passwordHash: string | null;
     isBot: boolean;
+    instanceAdmin: boolean;
     agentId: string | null;
     portrait: string | null;
     createdAt: number;
@@ -16,6 +18,24 @@ export type UserRow = {
     deletedAt: number | null;
     lastActiveAt: number | null;
 };
+
+// People who run this server: the first person to sign up, plus anyone listed
+// in INSTANCE_ADMINS. They manage model keys for every workspace.
+export function isInstanceAdmin(r: Pick<UserRow, 'instanceAdmin' | 'email' | 'isBot'>): boolean {
+    return !r.isBot && (r.instanceAdmin || (!!r.email && config.instanceAdmins.includes(r.email.toLowerCase())));
+}
+
+// The first person to sign up on a new server runs it. A lock makes two
+// sign-ups at the same moment pick one person.
+export async function claimInstanceAdmin(sql: Sql, userId: string): Promise<boolean> {
+    return sql.begin(async (t) => {
+        await t`select pg_advisory_xact_lock(72727273)`;
+        const rows = await t`update users set instance_admin = true
+            where id = ${userId} and not exists (select 1 from users where instance_admin)
+            returning id`;
+        return rows.length > 0;
+    }) as Promise<boolean>;
+}
 
 export function toUser(r: UserRow, opts: {includeEmail?: boolean} = {}): User {
     return {
@@ -27,6 +47,7 @@ export function toUser(r: UserRow, opts: {includeEmail?: boolean} = {}): User {
         agentId: r.agentId,
         portrait: r.portrait,
         createdAt: r.createdAt,
+        ...(opts.includeEmail && isInstanceAdmin(r) ? {instanceAdmin: true} : {}),
     };
 }
 

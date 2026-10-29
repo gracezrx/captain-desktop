@@ -3,10 +3,7 @@
 // app, and in local storage on the web.
 
 import {isTauri, secretDelete, secretGet, secretSet} from './native';
-import type {
-    Agent, AgentTool, Channel, ChannelMember, FileInfo, InvitePreview, ModelInfo, Post, Run, Session, UsageSummary, User, Workspace,
-    WorkspaceMember, WorkspaceRole,
-} from './types';
+import type {Agent, AgentTool, Channel, ChannelMember, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
 
 export type StoredSession = {serverUrl: string; token: string; userId: string};
 
@@ -95,6 +92,7 @@ async function request<T>(method: string, path: string, body?: unknown, init: Re
 const get = <T>(p: string) => request<T>('GET', p);
 const post = <T>(p: string, body: unknown = {}) => request<T>('POST', p, body);
 const patch = <T>(p: string, body: unknown) => request<T>('PATCH', p, body);
+const put = <T>(p: string, body: unknown) => request<T>('PUT', p, body);
 const del = <T>(p: string) => request<T>('DELETE', p);
 
 // ------------------------------------------------------------ session
@@ -223,6 +221,11 @@ export const api = {
     createAgent: (wsId: string, p: Partial<Agent> & {handle: string; name: string; instructions: string}) => post<Agent>(`/workspaces/${wsId}/agents`, p),
     updateAgent: (id: string, p: Partial<Agent>) => patch<Agent>(`/agents/${id}`, p),
     models: (wsId: string) => get<{models: ModelInfo[]; demoMode: boolean}>(`/workspaces/${wsId}/models`),
+    // Server settings (people who run the server only)
+    providers: () => get<ProviderKeyInfo[]>('/admin/providers'),
+    saveProviderKey: (id: string, apiKey: string, baseUrl?: string) => put<{provider: ProviderKeyInfo; check: ProviderCheck}>(`/admin/providers/${id}`, {apiKey, ...(baseUrl ? {baseUrl} : {})}),
+    removeProviderKey: (id: string) => del(`/admin/providers/${id}`),
+    checkProvider: (id: string) => post<ProviderCheck>(`/admin/providers/${id}/check`),
     usage: (wsId: string) => get<UsageSummary>(`/workspaces/${wsId}/usage`),
     approvals: (wsId: string) => get<{id: string; channelId: string; postId: string | null; runId: string | null; title: string; requestedBy: string | null; createdAt: number}[]>(`/workspaces/${wsId}/approvals`),
     run: (id: string) => get<Run>(`/runs/${id}`),

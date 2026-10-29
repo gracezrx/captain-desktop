@@ -10,7 +10,7 @@ import {type ChatEntry, useChats} from '../lib/chats';
 import {channelTitle, decisionOf, displayName, needsYou, otherUserId, useStore} from '../lib/store';
 import type {Agent} from '../lib/types';
 
-export type SidebarAction = 'new-channel' | 'browse' | 'new-dm' | 'settings' | 'invite' | 'new-workspace' | 'search';
+export type SidebarAction = 'new-channel' | 'browse' | 'new-dm' | 'settings' | 'invite' | 'new-workspace' | 'search' | 'models';
 
 export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction: (a: SidebarAction) => void}) {
     const chats = useChats();

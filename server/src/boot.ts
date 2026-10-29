@@ -17,6 +17,7 @@ import {migrate} from './db/migrate.js';
 import {LocalStorage} from './files/storage.js';
 import {JobQueue} from './jobs/queue.js';
 import {Catalog} from './llm/catalog.js';
+import {KeyStore} from './llm/keys.js';
 import {Router} from './llm/router.js';
 import {Cluster} from './realtime/cluster.js';
 import {Hub} from './realtime/hub.js';
@@ -44,7 +45,12 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
         log.info({applied}, 'database migrated');
     }
 
-    const router = new Router(sql, opts.catalog ?? Catalog.load());
+    const catalog = opts.catalog ?? Catalog.load();
+    const keys = new KeyStore(sql);
+    await keys.load();
+    catalog.useKeys(keys);
+    const router = new Router(sql, catalog);
+    keys.onChange = (ids) => router.resetProviders(ids);
     const storage = new LocalStorage(opts.filesDir ?? config.files.dir);
     const jobs = new JobQueue(sql, {concurrency: config.workers.concurrency, leaseSeconds: config.workers.leaseSeconds});
     const cluster = new Cluster(sql);
@@ -66,7 +72,7 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
         },
         forward: (userIds, event, o) => cluster.forward(userIds, event, o),
     });
-    const ctx = createCtx({sql, hub, storage, jobs, router});
+    const ctx = createCtx({sql, hub, storage, jobs, router, keys});
     ctxRef = ctx;
 
     const orchestrator = new Orchestrator(ctx);
@@ -77,6 +83,7 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
 
     hub.start();
     await cluster.start(hub);
+    await keys.start();
     if (opts.workers ?? config.workers.enabled) {
         await jobs.start();
     }
@@ -86,7 +93,7 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
     }, 3_600_000);
 
     if (router.demoMode) {
-        log.warn('no model provider key is set: agents answer in demo mode (see .env.example)');
+        log.warn('no model key yet: agents answer in demo mode. The first person to sign up can paste an OpenRouter key in Settings → Models & spend, or set OPENROUTER_API_KEY.');
     } else {
         log.info({models: router.catalog.available().map((m) => m.id)}, 'models available');
     }
@@ -99,6 +106,7 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
             hub.stop();
             await jobs.stop();
             await cluster.stop();
+            await keys.stop();
             await sql.end({timeout: 5});
         },
     };
