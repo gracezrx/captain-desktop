@@ -93,7 +93,7 @@ The server runs on any Postgres 14 or newer, including Supabase ([docs/DEPLOY.md
 cd server && npm test     # needs a captain_test database
 ```
 
-The 60 tests cover:
+The 64 tests cover:
 
 - accounts, invites, roles and password resets
 - private channels and DMs
@@ -103,7 +103,7 @@ The 60 tests cover:
 - routing by tier, fallback and the circuit breaker
 - streaming and tool calls
 - vision routing, budgets
-- model keys: who may set them, encryption, a rejected key not being saved, Settings winning over the environment, every instance picking up a change
+- model keys: who may set them, encryption, a rejected key not being saved, Settings winning over the environment, every instance picking up a change, and the server admin's account being safe from workspace owners
 - database addresses (TLS for Supabase, the transaction pooler warning) and row-level security on every table
 - the job queue's retries and recovery
 - security: what agents may quote where, links that need approval, blocked private addresses, approvals that run once, revoked invites and sessions, forged client addresses
