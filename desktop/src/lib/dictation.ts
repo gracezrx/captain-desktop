@@ -1,8 +1,10 @@
-// Voice typing. Uses the system speech recognizer through the Web Speech
-// API, which macOS's WebKit provides (on-device where the language allows).
-// A native Apple Speech bridge and ElevenLabs are planned behind the same hook.
+// Voice typing. In the Mac app it uses Apple's speech recognition through the
+// app's voice helper (the web view's own speech API isn't reliable there); in
+// Chrome and other browsers, the Web Speech API.
 
 import {useCallback, useEffect, useRef, useState} from 'react';
+
+import {nativeVoice, onVoice, voiceCancel, voiceStart, voiceStop} from './native';
 
 type Recognition = {
     lang: string;
@@ -36,6 +38,64 @@ export function setVoiceLang(lang: VoiceLang): void {
 // onText receives the full field text: what was there before you started
 // talking, plus everything said so far (final and in-progress words).
 export function useDictation(getBase: () => string, onText: (text: string) => void) {
+    const web = useWebDictation(getBase, onText);
+    const native = useNativeDictation(getBase, onText);
+    return nativeVoice ? native : web;
+}
+
+let owners = 0;
+
+function useNativeDictation(getBase: () => string, onText: (text: string) => void) {
+    const [listening, setListening] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const owner = useRef(`dictation-${++owners}`);
+    const base = useRef('');
+    const active = useRef(false);
+
+    useEffect(() => {
+        if (!nativeVoice) {
+            return undefined;
+        }
+        return onVoice(owner.current, (e) => {
+            if (e.type === 'partial' || e.type === 'final') {
+                onText(base.current + e.text);
+            } else if (e.type === 'error') {
+                setError(e.message);
+            } else if (e.type === 'end') {
+                active.current = false;
+                setListening(false);
+            }
+        });
+    }, [onText]);
+
+    const start = useCallback(() => {
+        if (active.current) {
+            return;
+        }
+        setError(null);
+        const before = getBase();
+        base.current = before && !/\s$/.test(before) ? `${before} ` : before;
+        active.current = true;
+        setListening(true);
+        voiceStart(getVoiceLang(), owner.current).catch((e) => {
+            active.current = false;
+            setListening(false);
+            setError(typeof e === 'string' ? e : 'Voice typing isn\'t available.');
+        });
+    }, [getBase]);
+
+    const stop = useCallback(() => void voiceStop(), []);
+
+    useEffect(() => () => {
+        if (active.current) {
+            void voiceCancel();
+        }
+    }, []);
+
+    return {supported: nativeVoice, listening, start, stop, error};
+}
+
+function useWebDictation(getBase: () => string, onText: (text: string) => void) {
     const ctor = recognitionCtor();
     const [listening, setListening] = useState(false);
     const [error, setError] = useState<string | null>(null);

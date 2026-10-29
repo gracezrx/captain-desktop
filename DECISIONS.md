@@ -83,6 +83,9 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | F6 | **GitHub builds the Mac app** on a macOS runner (Actions → Mac app). The .dmg and the extension go to the `app-latest` release. Until Quest Space's Developer ID secrets are added, builds are signed ad hoc, so the first open needs right-click → Open. Each build uses about 100 of your Actions minutes, because macOS minutes count ten times. | `.github/workflows/mac-app.yml`; add Apple signing secrets to notarize |
 | F7 ★ | **The Chrome extension** reuses the menu bar panel: write, inbox and decisions in the toolbar popup and in the side panel. It also offers: <ul><li>"This page", "Selection" and "Let agents read it" (the page's text attached as a .md file agents read)</li><li>right-click → Send to Captain (page, link, selection, image, tab screenshot)</li><li>a badge with what's waiting</li></ul> Pages are read only on a click: the popup uses the tab it was opened on, and the side panel asks Chrome once for permission to read pages. | `desktop/src/extension/`, `desktop/extension/manifest.json` |
 | F8 | The extension connects to **This Mac** (the app's built-in server) by default. For a hosted server, Chrome asks to allow that address at sign-in. In the side panel, sending a message opens that conversation so replies appear in place; the popup closes after sending. | `desktop/src/lib/api.ts` (`DEFAULT_SERVER`), `desktop/src/extension/App.tsx` |
+| F9 ★ | **Voice in the Mac app uses Apple's own speech recognition and voices**, through a small Swift helper bundled with the app (`captain-voice`), not the web view's speech API, which doesn't work reliably inside a Mac app. Recognition runs on the Mac when the language allows, so it's free and private. English and Chinese. | `desktop/src-tauri/voice/main.swift`, `desktop/src/lib/dictation.ts`. A nicer voice (for example ElevenLabs) could replace Apple's voices for answers. |
+| F10 ★ | **Shortcuts: ⌘⇧Space for the panel, ⌃⇧Space to talk.** The old ⌥⇧Space didn't work, because macOS 15 refuses global shortcuts made only of ⌥ (or ⌥⇧) plus a key. Both can be changed in Settings → This Mac, which shows when macOS refuses one. | `Settings` in `src-tauri/src/lib.rs` (saved in the app's config folder) |
+| F11 ★ | **A floating talk button**: a small face, always on top. Hold to talk, tap for hands-free, drag to move, right-click for options (language, spoken answers on or off, hide). Your question goes to your DM with Captain. The answer appears in a bubble, read aloud, and the bubble opens the conversation. It shows on first launch; hide it from its menu, and bring it back from the menu bar or Settings. | `desktop/src/orb/Orb.tsx`, `desktop/src/lib/talk.ts` |
 
 ## Your answers (Oct 28)
 
@@ -90,9 +93,9 @@ Most are a setting or a few lines. The ones marked **★** shape the product the
 | --- | --- | --- |
 | Voice typing | Hold to talk, tap for hands-free | Nothing: that's how it works |
 | Hosted server | Render | `render.yaml` is ready. Deploying needs your Render account (DEPLOY.md → On Render). |
-| Apple Developer account | Quest Space has one | The Mac build signs and notarizes once six secrets are added (DEPLOY.md → Signing and notarizing) |
+| Apple Developer account | Quest Space has one | The Mac build signs and notarizes once six secrets are added (DEPLOY.md → Signing and notarizing). Any Developer ID works, including a personal one. |
 | App name | Captain | Nothing |
-| Team sign-off | Grace asks Lisen and Sunny before it goes beyond testers | — |
+| Team sign-off | Not needed: a personal spin-off that stays in Grace's own GitHub (Oct 29) | — |
 | Who can sign up (hosted) | Invite-only | Nothing: B9 |
 | Who can approve | The person who asked, or an admin | Nothing: D6 |
 | Default budget | $20 a month per new workspace | E5 |

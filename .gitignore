@@ -9,3 +9,4 @@ server/data/
 desktop/src-tauri/resources/server/*
 !desktop/src-tauri/resources/server/README.md
 desktop/dist-extension/
+desktop/src-tauri/binaries/captain-voice-*

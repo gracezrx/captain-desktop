@@ -5,6 +5,7 @@ import {api, errorMessage} from '../lib/api';
 import {endSession, resume, startSession, whenSignedOut} from '../lib/boot';
 import {onOpenChannel} from '../lib/native';
 import {useStore} from '../lib/store';
+import {startTalkBridge} from '../lib/talk';
 
 import {ChatView} from './ChatView';
 import {BrowseChannels, NewChannel, NewMessage, SearchMessages} from './Dialogs';
@@ -45,6 +46,9 @@ export function App() {
     const activeChannelId = useStore((s) => s.activeChannelId);
     const setActive = useStore((s) => s.setActiveChannel);
     const [dialog, setDialog] = useState<SidebarAction | null>(null);
+
+    // Questions asked out loud through the floating talk button.
+    useEffect(() => startTalkBridge(), []);
 
     useEffect(() => {
         whenSignedOut(() => setPhase('signed-out'));

@@ -4,8 +4,8 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import {defineConfig} from 'vite';
 
-// Two pages, one bundle: the dashboard window (index.html) and the
-// menu bar panel (panel.html). Tauri loads them from the dev server in
+// Three pages, one bundle: the dashboard window (index.html), the menu bar
+// panel (panel.html) and the floating talk button (orb.html). Tauri loads them from the dev server in
 // development and from dist/ in a release build.
 export default defineConfig({
     plugins: [react(), tailwindcss()],
@@ -21,6 +21,7 @@ export default defineConfig({
             input: {
                 main: resolve(__dirname, 'index.html'),
                 panel: resolve(__dirname, 'panel.html'),
+                orb: resolve(__dirname, 'orb.html'),
             },
         },
     },

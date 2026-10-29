@@ -1,14 +1,17 @@
-//! Captain Desktop's native core: the menu bar icon, the global shortcut,
-//! the frosted panel that drops down from the icon, screen snapshots,
-//! notifications that open the right thread, and the Keychain.
+//! Captain Desktop's native core: the menu bar icon, the global shortcuts,
+//! the frosted panel that drops down from the icon, the floating talk button,
+//! voice (Apple's speech recognition and voices, through the captain-voice
+//! helper), screen snapshots, notifications that open the right thread, and
+//! the Keychain.
 //!
 //! Everything else (chats, messages, decisions) lives in the web view and
 //! talks to the Captain server directly (REST and one WebSocket). That server
 //! can be a hosted one, or the one built into this app (see "built-in server").
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -17,7 +20,7 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 const KEYCHAIN_SERVICE: &str = "ai.captainspace.desktop";
 const TRAY_ID: &str = "captain";
@@ -539,20 +542,397 @@ fn local_server_forget(app: AppHandle) -> Result<(), String> {
     }
 }
 
+// ------------------------------------------------------------ settings
+
+/// What the person set on this Mac, kept in the app's config folder.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Settings {
+    panel_shortcut: String,
+    talk_shortcut: String,
+    orb_visible: bool,
+    orb_position: Option<(i32, i32)>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        // macOS 15 refuses global shortcuts made only of ⌥ (or ⌥⇧) and a key,
+        // so these use ⌘ and ⌃.
+        Self {
+            panel_shortcut: "Command+Shift+Space".into(),
+            talk_shortcut: "Control+Shift+Space".into(),
+            orb_visible: true,
+            orb_position: None,
+        }
+    }
+}
+
+fn settings_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("settings.json"))
+}
+
+fn load_settings(app: &AppHandle) -> Settings {
+    settings_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(app: &AppHandle) {
+    let settings = app.state::<Mutex<Settings>>().lock().unwrap().clone();
+    if let Some(path) = settings_path(app) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(text) = serde_json::to_string_pretty(&settings) {
+            let _ = std::fs::write(path, text);
+        }
+    }
+}
+
+// ------------------------------------------------------------ shortcuts
+//
+// Two global shortcuts: one opens the panel to write; the other talks to
+// Captain (hold to talk, tap to start and tap again to send). Both can be
+// changed in Settings; if macOS refuses one, Settings says so.
+
+#[derive(Default)]
+struct Keys {
+    panel: Mutex<Option<Shortcut>>,
+    talk: Mutex<Option<Shortcut>>,
+    status: Mutex<std::collections::HashMap<String, ShortcutStatus>>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ShortcutStatus {
+    keys: String,
+    ok: bool,
+    error: Option<String>,
+}
+
+fn key_slot<'a>(keys: &'a Keys, kind: &str) -> &'a Mutex<Option<Shortcut>> {
+    if kind == "talk" {
+        &keys.talk
+    } else {
+        &keys.panel
+    }
+}
+
+/// Register `text` for `kind` ("panel" or "talk"). The old shortcut stays
+/// until the new one is registered, so a refused one changes nothing.
+fn apply_shortcut(app: &AppHandle, kind: &str, text: &str) -> ShortcutStatus {
+    let keys = app.state::<Keys>();
+    let status = match Shortcut::from_str(text) {
+        Err(_) => ShortcutStatus { keys: text.into(), ok: false, error: Some("That isn't a shortcut Captain understands.".into()) },
+        Ok(shortcut) => {
+            let current = *key_slot(&keys, kind).lock().unwrap();
+            let other = *key_slot(&keys, if kind == "talk" { "panel" } else { "talk" }).lock().unwrap();
+            if current == Some(shortcut) {
+                ShortcutStatus { keys: text.into(), ok: true, error: None }
+            } else if other == Some(shortcut) {
+                ShortcutStatus { keys: text.into(), ok: false, error: Some("The other Captain shortcut already uses those keys.".into()) }
+            } else {
+                match app.global_shortcut().register(shortcut) {
+                    Ok(()) => {
+                        if let Some(old) = current {
+                            let _ = app.global_shortcut().unregister(old);
+                        }
+                        *key_slot(&keys, kind).lock().unwrap() = Some(shortcut);
+                        ShortcutStatus { keys: text.into(), ok: true, error: None }
+                    }
+                    Err(_) => ShortcutStatus {
+                        keys: text.into(),
+                        ok: false,
+                        error: Some("macOS didn't allow it. Another app may use these keys, or they use only ⌥ (macOS 15 needs ⌘ or ⌃ too).".into()),
+                    },
+                }
+            }
+        }
+    };
+    keys.status.lock().unwrap().insert(kind.into(), status.clone());
+    status
+}
+
+#[derive(Serialize)]
+struct ShortcutsInfo {
+    panel: ShortcutStatus,
+    talk: ShortcutStatus,
+}
+
+#[tauri::command]
+fn shortcuts_get(app: AppHandle) -> ShortcutsInfo {
+    let keys = app.state::<Keys>();
+    let status = keys.status.lock().unwrap();
+    let settings = app.state::<Mutex<Settings>>().lock().unwrap().clone();
+    let get = |kind: &str, fallback: &str| status.get(kind).cloned().unwrap_or(ShortcutStatus { keys: fallback.into(), ok: false, error: None });
+    ShortcutsInfo { panel: get("panel", &settings.panel_shortcut), talk: get("talk", &settings.talk_shortcut) }
+}
+
+#[tauri::command]
+fn shortcut_set(app: AppHandle, kind: String, keys: String) -> ShortcutStatus {
+    let kind = if kind == "talk" { "talk" } else { "panel" };
+    let status = apply_shortcut(&app, kind, &keys);
+    if status.ok {
+        {
+            let mut settings = app.state::<Mutex<Settings>>().inner().lock().unwrap();
+            if kind == "talk" {
+                settings.talk_shortcut = keys;
+            } else {
+                settings.panel_shortcut = keys;
+            }
+        }
+        save_settings(&app);
+    }
+    status
+}
+
+/// The talk shortcut went down or up: the floating button handles it (hold
+/// to talk, or tap to start and tap again to send).
+fn talk_key(app: &AppHandle, pressed: bool) {
+    if let Some(orb) = app.get_webview_window("orb") {
+        if pressed {
+            let _ = orb.show();
+        }
+        let _ = orb.emit("talk-key", pressed);
+    }
+}
+
+// ------------------------------------------------------------ voice
+//
+// The captain-voice helper (voice/main.swift) sits next to the app's
+// executable. Listening streams its lines to the windows as "voice" events,
+// tagged with who asked; speaking sends "speech" events.
+
+#[derive(Default)]
+struct Voice {
+    listening: Mutex<Option<(Child, Option<ChildStdin>, String)>>,
+    speaking: Mutex<Option<Child>>,
+}
+
+fn voice_helper() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let helper = exe.parent().ok_or("No app folder.")?.join("captain-voice");
+    match std::fs::metadata(&helper) {
+        Ok(m) if m.len() > 0 => Ok(helper),
+        _ => Err("Voice isn't available in this copy of Captain.".into()),
+    }
+}
+
+#[tauri::command]
+fn voice_start(app: AppHandle, lang: String, owner: String) -> Result<(), String> {
+    speak_stop(app.clone());
+    let voice = app.state::<Voice>();
+    let mut slot = voice.listening.lock().unwrap();
+    if let Some((child, _, _)) = slot.as_mut() {
+        if let Ok(None) = child.try_wait() {
+            return Err("Captain is already listening.".into());
+        }
+    }
+    let lang = if lang == "zh-CN" { "zh-CN" } else { "en-US" };
+    let mut child = Command::new(voice_helper()?)
+        .args(["listen", lang])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't start voice: {e}"))?;
+    let stdout = child.stdout.take().ok_or("No output from voice.")?;
+    let stdin = child.stdin.take();
+    let pid = child.id();
+    *slot = Some((child, stdin, owner.clone()));
+    drop(slot);
+
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&line) {
+                value["owner"] = serde_json::Value::String(owner.clone());
+                let _ = handle.emit("voice", value);
+            }
+        }
+        let voice = handle.state::<Voice>();
+        let mut slot = voice.listening.lock().unwrap();
+        if slot.as_ref().map(|(c, _, _)| c.id()) == Some(pid) {
+            if let Some((mut child, _, _)) = slot.take() {
+                let _ = child.wait();
+            }
+        }
+        let _ = handle.emit("voice", serde_json::json!({"type": "end", "owner": owner}));
+    });
+    Ok(())
+}
+
+/// Finish listening: the helper sends what it heard, then ends.
+#[tauri::command]
+fn voice_stop(app: AppHandle) {
+    let voice = app.state::<Voice>();
+    let mut slot = voice.listening.lock().unwrap();
+    if let Some((_, stdin, _)) = slot.as_mut() {
+        if let Some(mut input) = stdin.take() {
+            let _ = input.write_all(b"stop\n");
+        }
+    }
+}
+
+#[tauri::command]
+fn voice_cancel(app: AppHandle) {
+    let voice = app.state::<Voice>();
+    let taken = voice.listening.lock().unwrap().take();
+    if let Some((mut child, _, _)) = taken {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[tauri::command]
+fn speak(app: AppHandle, text: String, lang: String) -> Result<(), String> {
+    speak_stop(app.clone());
+    let lang = if lang == "zh-CN" { "zh-CN" } else { "en-US" };
+    let mut child = Command::new(voice_helper()?)
+        .args(["speak", lang])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't start speaking: {e}"))?;
+    if let Some(mut input) = child.stdin.take() {
+        let _ = input.write_all(text.as_bytes());
+    }
+    let pid = child.id();
+    *app.state::<Voice>().speaking.lock().unwrap() = Some(child);
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(150));
+            let voice = handle.state::<Voice>();
+            let mut slot = voice.speaking.lock().unwrap();
+            match slot.as_mut() {
+                Some(child) if child.id() == pid => {
+                    if let Ok(Some(_)) = child.try_wait() {
+                        *slot = None;
+                        break;
+                    }
+                }
+                _ => break, // stopped, or replaced by newer speech
+            }
+        }
+        let _ = handle.emit("speech", serde_json::json!({"type": "done"}));
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn speak_stop(app: AppHandle) {
+    let taken = app.state::<Voice>().speaking.lock().unwrap().take();
+    if let Some(mut child) = taken {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+// ------------------------------------------------------------ floating talk button
+
+fn orb(app: &AppHandle) -> Option<WebviewWindow> {
+    app.get_webview_window("orb")
+}
+
+/// Bottom right of the main screen, unless it was moved before.
+fn place_orb(app: &AppHandle, window: &WebviewWindow) {
+    let saved = app.state::<Mutex<Settings>>().lock().unwrap().orb_position;
+    if let Some((x, y)) = saved {
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+        return;
+    }
+    if let Ok(Some(m)) = window.primary_monitor() {
+        let scale = m.scale_factor();
+        let size = window.outer_size().map(|s| (s.width as f64, s.height as f64)).unwrap_or((76.0 * scale, 76.0 * scale));
+        let x = m.position().x as f64 + m.size().width as f64 - size.0 - 28.0 * scale;
+        let y = m.position().y as f64 + m.size().height as f64 - size.1 - 110.0 * scale;
+        let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+    }
+}
+
+fn set_orb_visible(app: &AppHandle, visible: bool) {
+    if let Some(window) = orb(app) {
+        let _ = if visible { window.show() } else { window.hide() };
+    }
+    app.state::<Mutex<Settings>>().lock().unwrap().orb_visible = visible;
+    save_settings(app);
+}
+
+#[tauri::command]
+fn orb_set_visible(app: AppHandle, visible: bool) {
+    set_orb_visible(&app, visible);
+}
+
+#[tauri::command]
+fn orb_get_visible(app: AppHandle) -> bool {
+    app.state::<Mutex<Settings>>().lock().unwrap().orb_visible
+}
+
+/// The button's right-click menu.
+#[tauri::command]
+fn orb_menu(app: AppHandle, window: WebviewWindow, muted: bool, lang: String) -> Result<(), String> {
+    let item = |id: &str, label: &str| MenuItem::with_id(&app, id, label, true, None::<&str>).map_err(|e| e.to_string());
+    let menu = Menu::with_items(
+        &app,
+        &[
+            &item("orb-write", "Write to a chat…")?,
+            &item("orb-open", "Open Captain")?,
+            &PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?,
+            &item("orb-lang", if lang == "zh-CN" { "Listen in English" } else { "Listen in Chinese (中文)" })?,
+            &item("orb-mute", if muted { "Speak answers out loud" } else { "Don't speak answers" })?,
+            &PredefinedMenuItem::separator(&app).map_err(|e| e.to_string())?,
+            &item("orb-hide", "Hide this button")?,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    window.popup_menu(&menu).map_err(|e| e.to_string())
+}
+
+/// Remember where the button was left (called after it's dragged).
+#[tauri::command]
+fn orb_moved(app: AppHandle, window: WebviewWindow) {
+    if let Ok(p) = window.outer_position() {
+        app.state::<Mutex<Settings>>().lock().unwrap().orb_position = Some((p.x, p.y));
+        save_settings(&app);
+    }
+}
+
+fn on_app_menu(app: &AppHandle, id: &str) {
+    match id {
+        "orb-write" => open_panel(app, PanelTarget::mode("compose")),
+        "orb-open" => show_dashboard(app),
+        "orb-hide" => set_orb_visible(app, false),
+        "orb-lang" | "orb-mute" => {
+            if let Some(window) = orb(app) {
+                let _ = window.emit("orb-menu", id);
+            }
+        }
+        _ => {}
+    }
+}
+
 // ------------------------------------------------------------ app
 
 pub fn run() {
-    let shortcut = Shortcut::new(Some(Modifiers::ALT | Modifiers::SHIFT), Code::Space);
-
     tauri::Builder::default()
         .manage(AppState::default())
         .manage(LocalServer::default())
+        .manage(Keys::default())
+        .manage(Voice::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, pressed, event| {
-                    if pressed == &shortcut && event.state() == ShortcutState::Pressed {
+                .with_handler(|app, pressed, event| {
+                    let keys = app.state::<Keys>();
+                    let is_panel = *keys.panel.lock().unwrap() == Some(*pressed);
+                    let is_talk = *keys.talk.lock().unwrap() == Some(*pressed);
+                    if is_panel && event.state() == ShortcutState::Pressed {
                         toggle_panel(app, PanelTarget::mode("compose"));
+                    } else if is_talk {
+                        talk_key(app, event.state() == ShortcutState::Pressed);
                     }
                 })
                 .build(),
@@ -573,6 +953,17 @@ pub fn run() {
             local_server_restart,
             local_server_stop,
             local_server_forget,
+            shortcuts_get,
+            shortcut_set,
+            voice_start,
+            voice_stop,
+            voice_cancel,
+            speak,
+            speak_stop,
+            orb_menu,
+            orb_moved,
+            orb_set_visible,
+            orb_get_visible,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -582,18 +973,30 @@ pub fn run() {
                 start_local_in_background(&handle);
             }
 
-            // ⌥⇧Space opens the panel ready to write, from anywhere.
-            if let Err(e) = app.global_shortcut().register(shortcut) {
-                eprintln!("Couldn't register ⌥⇧Space (another app may be using it): {e}");
+            // Settings, and the two shortcuts (panel; talk).
+            let settings = load_settings(&handle);
+            app.manage(Mutex::new(settings.clone()));
+            apply_shortcut(&handle, "panel", &settings.panel_shortcut);
+            apply_shortcut(&handle, "talk", &settings.talk_shortcut);
+
+            // The floating talk button.
+            if let Some(window) = orb(&handle) {
+                place_orb(&handle, &window);
+                let _ = window.set_visible_on_all_workspaces(true);
+                if settings.orb_visible {
+                    let _ = window.show();
+                }
             }
+            app.on_menu_event(|app, event| on_app_menu(app, event.id.as_ref()));
 
             // The menu bar icon: click for the inbox, right-click for a menu.
             let menu = Menu::with_items(
                 app,
                 &[
-                    &MenuItem::with_id(app, "write", "New message      ⌥⇧Space", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "write", "New message", true, None::<&str>)?,
                     &MenuItem::with_id(app, "inbox", "Inbox", true, None::<&str>)?,
                     &MenuItem::with_id(app, "open", "Open Captain", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "orb-show", "Show the talk button", true, None::<&str>)?,
                     &MenuItem::with_id(app, "restart-server", "Restart Captain on this Mac", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
                     &MenuItem::with_id(app, "quit", "Quit Captain", true, None::<&str>)?,
@@ -609,6 +1012,7 @@ pub fn run() {
                     "write" => open_panel(app, PanelTarget::mode("compose")),
                     "inbox" => open_panel(app, PanelTarget::mode("inbox")),
                     "open" => show_dashboard(app),
+                    "orb-show" => set_orb_visible(app, true),
                     "restart-server" => {
                         stop_local(app);
                         start_local_in_background(app);
@@ -674,9 +1078,11 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { .. } = event {
                 show_dashboard(app);
             }
-            // Quitting Captain stops its built-in server.
+            // Quitting Captain stops its built-in server and its voice.
             if let tauri::RunEvent::Exit = event {
                 stop_local(app);
+                voice_cancel(app.clone());
+                speak_stop(app.clone());
             }
             let _ = (app, event);
         });

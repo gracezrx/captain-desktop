@@ -1,4 +1,4 @@
-import {AtSign, Command, KeyRound, LogOut, MousePointerClick, Sparkles, UserPlus, X} from 'lucide-react';
+import {AtSign, Command, KeyRound, LogOut, Mic, MousePointerClick, Sparkles, UserPlus, X} from 'lucide-react';
 import {Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 
 import {ChatIcon} from '../components/ChatIcon';
@@ -7,7 +7,9 @@ import {isGrouped, MessageRow} from '../components/MessageRow';
 import {Typing} from '../components/Typing';
 import {api, errorMessage} from '../lib/api';
 import {dayLabel} from '../lib/format';
+import {isTauri} from '../lib/native';
 import {mentionsAgent} from '../lib/send';
+import {useShortcutLabels} from '../lib/shortcuts';
 import {agentForUser, channelTitle, displayName, isAgentChannel, otherUserId, useStore} from '../lib/store';
 import type {ClientPost} from '../lib/types';
 
@@ -309,6 +311,7 @@ function ThreadPane({rootId, onClose, onOpenImage}: {rootId: string; onClose: ()
 
 function Home({onInvite, onModels}: {onInvite: () => void; onModels: () => void}) {
     const me = useStore((s) => s.me);
+    const keys = useShortcutLabels();
     const demoMode = useStore((s) => s.demoMode);
     const agents = useStore((s) => s.agents);
     const workspace = useStore((s) => s.workspace);
@@ -357,7 +360,8 @@ function Home({onInvite, onModels}: {onInvite: () => void; onModels: () => void}
                 <div className='mt-8 grid gap-2.5 text-left'>
                     <Tip icon={<Sparkles size={16}/>} title='@captain plans the work' text='Ask for something big. Captain splits it across Researcher, Analyst, Writer and Designer, picks a model for each step, and posts one answer.'/>
                     <Tip icon={<MousePointerClick size={16}/>} title='Nothing leaves without a yes' text='Emails and other outside actions wait for your approval: a card in the chat and a banner on your Mac.'/>
-                    <Tip icon={<Command size={16}/>} title='⌥⇧Space opens the quick panel' text='Write to any chat, snap your screen, or hold ⌥ to talk, without leaving what you are doing.'/>
+                    <Tip icon={<Command size={16}/>} title={`${keys.panel} opens the quick panel`} text='Write to any chat, snap your screen, or hold ⌥ to talk, without leaving what you are doing.'/>
+                    {isTauri && <Tip icon={<Mic size={16}/>} title={`Talk to Captain: hold ${keys.talk}`} text='Or press the little face on your screen. Captain answers out loud. Tap once for hands-free, and right-click it for options.'/>}
                 </div>
             </div>
         </div>

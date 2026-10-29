@@ -304,3 +304,115 @@ export async function waitForServer(url: string, timeoutMs = 30_000): Promise<bo
     }
     return false;
 }
+
+// ------------------------------------------------------------ voice (Mac app)
+
+// Apple's speech recognition and voices, through the app's captain-voice
+// helper. Events are tagged with who started listening, since every window
+// hears them.
+export type VoiceEvent =
+    | {type: 'ready'; owner: string}
+    | {type: 'level'; value: number; owner: string}
+    | {type: 'partial' | 'final'; text: string; owner: string}
+    | {type: 'error'; message: string; owner: string}
+    | {type: 'end'; owner: string};
+
+export const nativeVoice = isTauri;
+
+export async function voiceStart(lang: string, owner: string): Promise<void> {
+    await invoke('voice_start', {lang, owner});
+}
+
+export async function voiceStop(): Promise<void> {
+    await invoke('voice_stop').catch(() => undefined);
+}
+
+export async function voiceCancel(): Promise<void> {
+    await invoke('voice_cancel').catch(() => undefined);
+}
+
+export function onVoice(owner: string, handler: (e: VoiceEvent) => void): () => void {
+    let un: UnlistenFn | undefined;
+    let gone = false;
+    listen<VoiceEvent>('voice', (e) => {
+        if (e.payload.owner === owner) {
+            handler(e.payload);
+        }
+    }).then((u) => {
+        if (gone) {
+            u();
+        } else {
+            un = u;
+        }
+    });
+    return () => {
+        gone = true;
+        un?.();
+    };
+}
+
+// Say something out loud (answers from Captain). Resolves when it's done.
+export async function speak(text: string, lang: string): Promise<void> {
+    if (!isTauri) {
+        if ('speechSynthesis' in window) {
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = lang;
+            await new Promise<void>((resolve) => {
+                u.onend = () => resolve();
+                u.onerror = () => resolve();
+                speechSynthesis.speak(u);
+            });
+        }
+        return;
+    }
+    let un: UnlistenFn | undefined;
+    const done = new Promise<void>((resolve) => {
+        listen('speech', () => resolve()).then((u) => {
+            un = u;
+        });
+    });
+    try {
+        await invoke('speak', {text, lang});
+        await done;
+    } finally {
+        un?.();
+    }
+}
+
+export async function speakStop(): Promise<void> {
+    if (isTauri) {
+        await invoke('speak_stop').catch(() => undefined);
+    } else if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
+    }
+}
+
+// ------------------------------------------------------------ shortcuts (Mac app)
+
+export type ShortcutStatus = {keys: string; ok: boolean; error: string | null};
+
+export async function shortcutsGet(): Promise<{panel: ShortcutStatus; talk: ShortcutStatus} | null> {
+    return isTauri ? invoke('shortcuts_get') : null;
+}
+
+export async function shortcutSet(kind: 'panel' | 'talk', keys: string): Promise<ShortcutStatus> {
+    return invoke('shortcut_set', {kind, keys});
+}
+
+// "Command+Shift+Space" → "⌘⇧Space"
+export function prettyKeys(keys: string): string {
+    const symbols: Record<string, string> = {command: '⌘', cmd: '⌘', super: '⌘', commandorcontrol: '⌘', control: '⌃', ctrl: '⌃', alt: '⌥', option: '⌥', shift: '⇧'};
+    const order = ['⌃', '⌥', '⇧', '⌘'];
+    const parts = keys.split('+').map((p) => p.trim());
+    const mods = parts.slice(0, -1).map((p) => symbols[p.toLowerCase()] ?? p).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    const key = (parts.at(-1) ?? '').replace(/^Key/, '').replace(/^Digit/, '');
+    return mods.join('') + key;
+}
+
+export async function talkButtonVisible(): Promise<boolean> {
+    return isTauri ? invoke<boolean>('orb_get_visible') : false;
+}
+
+export async function setTalkButtonVisible(visible: boolean): Promise<void> {
+    await invoke('orb_set_visible', {visible});
+}

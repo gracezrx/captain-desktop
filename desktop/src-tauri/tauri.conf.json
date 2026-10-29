@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "ai.captainspace.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:voice && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build && npm run bundle:server",
+    "beforeBuildCommand": "npm run build && npm run bundle:server && npm run build:voice",
     "frontendDist": "../dist"
   },
   "app": {
@@ -42,6 +42,23 @@
         "resizable": false,
         "shadow": true,
         "visibleOnAllWorkspaces": true
+      },
+      {
+        "label": "orb",
+        "title": "Captain voice",
+        "url": "orb.html",
+        "width": 76,
+        "height": 76,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "focus": false,
+        "acceptFirstMouse": true,
+        "visibleOnAllWorkspaces": true
       }
     ],
     "security": {
@@ -65,10 +82,14 @@
     ],
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
     },
     "resources": {
       "resources/server": "server"
-    }
+    },
+    "externalBin": [
+      "binaries/captain-voice"
+    ]
   }
 }

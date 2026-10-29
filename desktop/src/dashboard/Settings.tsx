@@ -1,15 +1,16 @@
 // Workspace settings: your profile, people and invites, agents, models and spend.
 
-import {AlertTriangle, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Plus, Users, UserRound} from 'lucide-react';
+import {AlertTriangle, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Laptop, Plus, Users, UserRound} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 
 import {Avatar, PORTRAITS, portraitSrc} from '../components/Avatar';
 import {FieldLabel, ghostBtn, input, Modal, primaryBtn} from '../components/Modal';
 import {api, errorMessage} from '../lib/api';
+import {isTauri, localServerRestart, localServerStatus, type LocalServerStatus, prettyKeys, setTalkButtonVisible, shortcutSet, shortcutsGet, type ShortcutStatus, talkButtonVisible} from '../lib/native';
 import {displayName, modelLabel, useStore} from '../lib/store';
 import type {Agent, AgentTool, ModelInfo, ProviderCheck, ProviderKeyInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
 
-type Tab = 'profile' | 'people' | 'agents' | 'models';
+type Tab = 'profile' | 'people' | 'agents' | 'models' | 'mac';
 
 export function Settings({onClose, initial = 'people'}: {onClose: () => void; initial?: Tab}) {
     const ws = useStore((s) => s.workspace)!;
@@ -20,6 +21,7 @@ export function Settings({onClose, initial = 'people'}: {onClose: () => void; in
         ['agents', 'Agents', <Bot key='a' size={15}/>],
         ['models', 'Models & spend', <Cpu key='m' size={15}/>],
         ['profile', 'Your profile', <UserRound key='u' size={15}/>],
+        ...(isTauri ? [['mac', 'This Mac', <Laptop key='l' size={15}/>] as [Tab, string, React.ReactNode]] : []),
     ];
     return (
         <Modal title={`${ws.name} settings`} onClose={onClose} width={760}>
@@ -36,6 +38,7 @@ export function Settings({onClose, initial = 'people'}: {onClose: () => void; in
                     {tab === 'agents' && <Agents admin={admin}/>}
                     {tab === 'models' && <Models admin={admin}/>}
                     {tab === 'profile' && <Profile/>}
+                    {tab === 'mac' && <ThisMacSettings/>}
                 </div>
             </div>
         </Modal>
@@ -604,6 +607,123 @@ function ProviderRow({p, open = false, onChanged, result, onResult: setResult}: 
                 </p>
             )}
             {error && <p className='mt-2 text-[12px] text-alert'>{error}</p>}
+        </div>
+    );
+}
+
+// ------------------------------------------------------------ this Mac (the app only)
+
+function ThisMacSettings() {
+    const [keys, setKeys] = useState<{panel: ShortcutStatus; talk: ShortcutStatus} | null>(null);
+    const [button, setButton] = useState<boolean | null>(null);
+    const [server, setServer] = useState<LocalServerStatus | null>(null);
+
+    useEffect(() => {
+        void shortcutsGet().then(setKeys);
+        void talkButtonVisible().then(setButton);
+        void localServerStatus().then(setServer);
+    }, []);
+
+    return (
+        <div className='space-y-6'>
+            <section>
+                <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Keyboard shortcuts</h3>
+                <p className='mb-3 text-[12.5px] text-muted'>They work in any app. macOS 15 and later only allows shortcuts that include ⌘ or ⌃.</p>
+                {keys && (
+                    <div className='space-y-2'>
+                        <ShortcutRow kind='panel' label='Write to a chat' hint='Opens the panel from the menu bar' status={keys.panel} onChange={(st) => setKeys({...keys, panel: st})}/>
+                        <ShortcutRow kind='talk' label='Talk to Captain' hint='Hold to talk, or tap to start and tap again to send. Captain answers out loud.' status={keys.talk} onChange={(st) => setKeys({...keys, talk: st})}/>
+                    </div>
+                )}
+            </section>
+            <section>
+                <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Talk button</h3>
+                <label className='flex items-center gap-3 text-[13px] text-text'>
+                    <input
+                        type='checkbox'
+                        className='size-4 accent-[var(--accent)]'
+                        checked={!!button}
+                        disabled={button === null}
+                        onChange={(e) => {
+                            setButton(e.target.checked);
+                            void setTalkButtonVisible(e.target.checked);
+                        }}
+                    />
+                    Show the floating talk button on the screen
+                </label>
+                <p className='mt-1 pl-7 text-[12px] text-muted'>Drag it anywhere. Right-click it to switch language or turn off spoken answers.</p>
+            </section>
+            {server?.configured && (
+                <section>
+                    <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Captain on this Mac</h3>
+                    <div className='flex items-center gap-3 text-[13px]'>
+                        <span className={`size-2 rounded-full ${server.running ? 'bg-emerald-500' : 'bg-amber-500'}`}/>
+                        <span className='text-text'>{server.running ? `Running at ${server.url.replace('http://', '')}` : server.starting ? 'Starting…' : server.error ?? 'Stopped'}</span>
+                        <button type='button' className={`${ghostBtn} ml-auto`} onClick={() => void localServerRestart().then(() => window.setTimeout(() => void localServerStatus().then(setServer), 1500))}>Restart</button>
+                    </div>
+                </section>
+            )}
+        </div>
+    );
+}
+
+// Keys a shortcut can use: letters, digits, Space, F-keys and a few marks.
+function acceleratorFrom(e: KeyboardEvent): string | null {
+    const mods = [e.metaKey && 'Command', e.ctrlKey && 'Control', e.altKey && 'Alt', e.shiftKey && 'Shift'].filter(Boolean) as string[];
+    const code = e.code;
+    if (!mods.length || /^(Meta|Control|Alt|Shift)(Left|Right)$/.test(code) || !code) {
+        return null;
+    }
+    return [...mods, code].join('+');
+}
+
+function ShortcutRow({kind, label, hint, status, onChange}: {kind: 'panel' | 'talk'; label: string; hint: string; status: ShortcutStatus; onChange: (s: ShortcutStatus) => void}) {
+    const [recording, setRecording] = useState(false);
+    const [error, setError] = useState<string | null>(status.ok ? null : status.error);
+
+    useEffect(() => {
+        if (!recording) {
+            return undefined;
+        }
+        const onKey = (e: KeyboardEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.key === 'Escape') {
+                setRecording(false);
+                return;
+            }
+            const keys = acceleratorFrom(e);
+            if (!keys) {
+                return; // still holding modifiers
+            }
+            setRecording(false);
+            void shortcutSet(kind, keys).then((st) => {
+                if (st.ok) {
+                    onChange(st);
+                    setError(null);
+                } else {
+                    setError(`${prettyKeys(keys)}: ${st.error}`);
+                }
+            });
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [recording, kind, onChange]);
+
+    return (
+        <div className='rounded-xl bg-bg-subtle px-3 py-2.5 ring-1 ring-line/70'>
+            <div className='flex items-center gap-3'>
+                <div className='min-w-0 flex-1'>
+                    <div className='text-[13px] font-bold text-ink'>{label}</div>
+                    <div className='text-[12px] text-muted'>{hint}</div>
+                </div>
+                <kbd className={`rounded-lg px-2 py-1 font-sans text-[13px] font-bold ring-1 ${status.ok ? 'bg-surface text-ink ring-line' : 'bg-surface text-alert ring-alert/40'}`}>
+                    {recording ? 'Press keys…' : prettyKeys(status.keys)}
+                </kbd>
+                <button type='button' className={ghostBtn} onClick={() => setRecording(!recording)}>{recording ? 'Cancel' : 'Change'}</button>
+            </div>
+            {!status.ok && !error && <p className='mt-1.5 text-[12px] text-alert'>This shortcut isn&apos;t working: macOS didn&apos;t allow it. Pick another.</p>}
+            {error && <p className='mt-1.5 text-[12px] text-alert'>{error}</p>}
         </div>
     );
 }

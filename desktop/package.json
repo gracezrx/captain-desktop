@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "dev:server": "npm --prefix ../server run dev",
     "bundle:server": "node scripts/bundle-server.mjs",
-    "build:extension": "tsc --noEmit && vite build --config vite.extension.config.ts"
+    "build:extension": "tsc --noEmit && vite build --config vite.extension.config.ts",
+    "build:voice": "node scripts/build-voice.mjs"
   },
   "dependencies": {
     "@fontsource-variable/manrope": "^5.3.0",

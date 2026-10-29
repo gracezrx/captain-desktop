@@ -157,7 +157,9 @@ Agent messages carry `props.model` (the model id, provider, tier and cost) and, 
 - `realtime.ts` applies events, raises banners and sets the badge. In the Mac app, the dashboard window owns the only socket and relays its events to the panel window.
 - The Rust core (`desktop/src-tauri/src/lib.rs`) handles everything native:
   - the menu bar icon and its badge
-  - the ⌥⇧Space shortcut
+  - two global shortcuts (the panel; talk to Captain), changeable in Settings → This Mac
+  - the floating talk button (`orb.html`, `src/orb/`): its questions go to your DM with Captain through the dashboard window (`src/lib/talk.ts`)
+  - voice: the `captain-voice` helper (`src-tauri/voice/main.swift`) uses Apple's speech recognition to listen and Apple's voices to speak
   - the frosted panel under the icon
   - `screencapture` snapshots
   - notification banners that open the right thread
