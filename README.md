@@ -11,7 +11,7 @@ Anything that leaves the workspace, such as an email, waits for a person to appr
 
 It comes in four parts:
 
-- **A Mac app**: a dashboard window, plus a frosted panel that drops down from the menu bar. Press **⌃⇧C** anywhere to write to any chat, snap your screen, talk instead of type, or approve what an agent wants to do. A little floating face talks with you: hold it, or hold **⌃⇧Space**, ask Captain something, and it answers out loud. The app can run the Captain server itself, so nothing else needs installing.
+- **A Mac app**: a dashboard window, plus a frosted panel that drops down from the menu bar. Press **⌃⇧C** anywhere to write to any chat, snap your screen, talk instead of type, or approve what an agent wants to do. A little Captain floats over your work: hold it (or **⌃⇧Space**) and say what you need. It sends it to the chat and agents you named, shows the steps as they go, and reads the answer out loud. It can also type what you say into any app. The app can run the Captain server itself, so nothing else needs installing.
 - **A Chrome extension**: a toolbar popup and a side panel with the same compact view. It can send the page you're on, selected text or a screenshot to a chat, let agents read the page when you click, and approve decisions.
 - **A web app** with the same interface, so testers can use a browser.
 - **A server** that does everything else: accounts, workspaces, chat, real time, model routing and multi-agent orchestration. It runs inside the Mac app, or hosted for a whole team.

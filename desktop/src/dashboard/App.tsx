@@ -49,7 +49,7 @@ export function App() {
     const setActive = useStore((s) => s.setActiveChannel);
     const [dialog, setDialog] = useState<SidebarAction | 'setup' | null>(null);
 
-    // Questions asked out loud through the floating talk button.
+    // The floating Captain: what it shows, and the requests said to it.
     useEffect(() => startTalkBridge(), []);
 
     useEffect(() => {

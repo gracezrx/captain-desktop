@@ -13,7 +13,17 @@
 //   captain-voice speak <lang>    Reads text on stdin and says it with the best
 //                                 voice installed for that language; prints
 //                                 {"type":"done"} when finished.
+//   captain-voice frontapp        The app in front of Captain (where voice
+//                                 typing goes): {"type":"app","name":"Notes","pid":123},
+//                                 or {"type":"none"}.
+//   captain-voice paste <pid>     Reads text on stdin and pastes it where the
+//                                 cursor is in that app, then puts the clipboard
+//                                 back. Needs Accessibility permission (macOS
+//                                 asks the first time); prints {"type":"done"}
+//                                 or {"type":"error","message":"…"}.
 
+import AppKit
+import ApplicationServices
 import AVFoundation
 import Foundation
 import Speech
@@ -214,9 +224,85 @@ func listen() -> Never {
     exit(0)
 }
 
+// ------------------------------------------------------------ type into other apps
+
+func frontApp() -> Never {
+    let captain = getppid()
+    let me = getpid()
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    // Windows come front to back: the first ordinary window not Captain's.
+    for info in windows {
+        guard let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue, layer == 0,
+              let pid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+              pid != captain, pid != me else { continue }
+        let app = NSRunningApplication(processIdentifier: pid)
+        guard app?.activationPolicy == .regular else { continue }
+        let name = app?.localizedName ?? (info[kCGWindowOwnerName as String] as? String) ?? "the app in front"
+        emit(["type": "app", "name": name, "pid": Int(pid)])
+        exit(0)
+    }
+    emit(["type": "none"])
+    exit(0)
+}
+
+func paste(into pid: pid_t) -> Never {
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    let text = String(data: input, encoding: .utf8) ?? ""
+    if text.isEmpty {
+        emit(["type": "done"])
+        exit(0)
+    }
+    let prompt = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    guard AXIsProcessTrustedWithOptions(prompt) else {
+        fail("Captain needs Accessibility permission to type into other apps. Turn on Captain in System Settings → Privacy & Security → Accessibility, then try again.")
+    }
+    // Bring that app back to the front (clicking Captain may have taken it).
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+        let element = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(element, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+        usleep(200_000)
+    }
+    let pasteboard = NSPasteboard.general
+    let saved: [[(NSPasteboard.PasteboardType, Data)]] = (pasteboard.pasteboardItems ?? []).map { item in
+        item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+    }
+    pasteboard.clearContents()
+    pasteboard.setString(text, forType: .string)
+    usleep(60_000)
+    // ⌘V
+    let source = CGEventSource(stateID: .combinedSessionState)
+    let keyV: CGKeyCode = 9
+    let down = CGEvent(keyboardEventSource: source, virtualKey: keyV, keyDown: true)
+    down?.flags = .maskCommand
+    let up = CGEvent(keyboardEventSource: source, virtualKey: keyV, keyDown: false)
+    up?.flags = .maskCommand
+    down?.post(tap: .cghidEventTap)
+    up?.post(tap: .cghidEventTap)
+    // Put back what was on the clipboard once the app has pasted.
+    usleep(450_000)
+    pasteboard.clearContents()
+    let items: [NSPasteboardItem] = saved.map { pairs in
+        let item = NSPasteboardItem()
+        for (type, data) in pairs {
+            item.setData(data, forType: type)
+        }
+        return item
+    }
+    if !items.isEmpty {
+        pasteboard.writeObjects(items)
+    }
+    emit(["type": "done"])
+    exit(0)
+}
+
 switch mode {
 case "speak":
     speak()
+case "frontapp":
+    frontApp()
+case "paste":
+    paste(into: pid_t(language) ?? 0)
 default:
     listen()
 }

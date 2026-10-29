@@ -454,3 +454,27 @@ export async function revealChromeExtension(): Promise<string> {
 }
 
 export const RELEASE_PAGE = 'https://github.com/gracezrx/captain-desktop/releases/tag/app-latest';
+
+// ------------------------------------------------------------ voice typing (Mac app)
+
+// The app in front of Captain (where voice typing goes), or null.
+export type FrontApp = {name: string; pid: number};
+
+export async function frontApp(): Promise<FrontApp | null> {
+    return isTauri ? invoke<FrontApp | null>('front_app').catch(() => null) : null;
+}
+
+// Paste text where the cursor is in that app. Needs Accessibility permission;
+// the error says how to turn it on.
+export async function typeInto(pid: number, text: string): Promise<void> {
+    await invoke('type_text', {pid, text});
+}
+
+export const ACCESSIBILITY_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+
+// Esc cancels while Captain listens or speaks, whichever app is in front.
+export async function orbEscape(active: boolean): Promise<void> {
+    if (isTauri) {
+        await invoke('orb_escape', {active}).catch(() => undefined);
+    }
+}

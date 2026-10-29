@@ -273,13 +273,14 @@ function VoiceTest({onWorked}: {onWorked: () => void}) {
     return (
         <div>
             <p>Click Test, then say something like &ldquo;Hi Captain&rdquo;. The first time, macOS asks to let Captain use the microphone and speech recognition: allow both. Captain then says back what it heard.</p>
+            <p className='mt-1.5 text-muted'>Typing into other apps by voice (&ldquo;Type into Notes&rdquo; on the talk card) also needs Accessibility: macOS asks the first time you use it.</p>
             <div className='mt-2 flex flex-wrap items-center gap-2'>
                 <button type='button' className={phase === 'worked' ? ghostBtn : primaryBtn} disabled={phase === 'listening' || phase === 'speaking'} onClick={start}>
                     <Mic size={14}/> {phase === 'listening' ? 'Listening…' : phase === 'speaking' ? 'Speaking…' : phase === 'worked' ? 'Test again' : 'Test'}
                 </button>
                 {heard && <span className='min-w-0 truncate italic text-muted'>&ldquo;{heard}&rdquo;</span>}
             </div>
-            {phase === 'worked' && <p className='mt-1.5 font-semibold text-accent-text'>Works. Hold {keys.talk} or the floating face to talk to Captain.</p>}
+            {phase === 'worked' && <p className='mt-1.5 font-semibold text-accent-text'>Works. Hold {keys.talk}, or hold the little Captain on your screen, to talk.</p>}
             {error && (
                 <p className='mt-1.5 text-alert'>
                     {error} If you said no to a permission, turn Captain on in System Settings → Privacy &amp; Security → Microphone, and → Speech Recognition.
@@ -306,7 +307,7 @@ function TalkButtonToggle() {
                     void setTalkButtonVisible(e.target.checked);
                 }}
             />
-            Show the floating talk button (drag it anywhere; right-click it for options)
+            Show the little Captain on your screen (hold it to talk, click it for what needs you, drag it to an edge)
         </label>
     );
 }

@@ -161,7 +161,7 @@ Agent messages carry `props.model` (the model id, provider, tier and cost) and, 
 - The Rust core (`desktop/src-tauri/src/lib.rs`) handles everything native:
   - the menu bar icon and its badge
   - two global shortcuts (the panel; talk to Captain), changeable in Settings → This Mac
-  - the floating talk button (`orb.html`, `src/orb/`): its questions go to your DM with Captain through the dashboard window (`src/lib/talk.ts`)
+  - the floating Captain (`orb.html`, `src/orb/`): the dashboard window feeds it what needs you and the chats and agents it can route to, posts what you say (`src/lib/talk.ts`, routing in `src/lib/route.ts`) and reports the plan's steps and the answer back; voice typing goes through the helper (`frontapp`, `paste`)
   - voice: the `captain-voice` helper (`src-tauri/voice/main.swift`) uses Apple's speech recognition to listen and Apple's voices to speak
   - the frosted panel under the icon
   - `screencapture` snapshots

@@ -3,7 +3,8 @@ import {useState} from 'react';
 
 import {api, errorMessage} from '../lib/api';
 import {timeOfDay} from '../lib/format';
-import {canDecide, decisionOf, displayName, useStore} from '../lib/store';
+import {sendMessage} from '../lib/send';
+import {agentForUser, canDecide, decisionOf, displayName, useStore} from '../lib/store';
 import type {Post} from '../lib/types';
 
 // "The agent prepares, a person confirms." The decided card comes back to
@@ -14,11 +15,43 @@ export function DecisionCard({post, compact = false}: {post: Post; compact?: boo
     const me = useStore((s) => s.me);
     const workspace = useStore((s) => s.workspace);
     const updatePost = useStore((s) => s.updatePost);
+    const agents = useStore((s) => s.agents);
+    const channel = useStore((s) => s.channels[post.channelId]);
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    const [changing, setChanging] = useState(false);
+    const [change, setChange] = useState('');
     if (!decision) {
         return null;
     }
+
+    // "Change it": say what to change. The draft is turned down and the agent
+    // is asked, in the thread, to redo it that way (and ask again).
+    const changeIt = async () => {
+        const what = change.trim();
+        if (!what) {
+            return;
+        }
+        setBusy('change');
+        setError(null);
+        try {
+            updatePost(await api.postAction(post.id, 'reject'));
+            const agent = agentForUser(agents, post.userId);
+            const direct = channel?.type === 'D';
+            await sendMessage({
+                channelId: post.channelId,
+                rootId: direct ? post.rootId : post.rootId ?? post.id,
+                text: `${agent && !direct ? `@${agent.handle} ` : ''}Change "${decision.title}": ${what}`,
+                attachments: [],
+            });
+            setChanging(false);
+            setChange('');
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(null);
+        }
+    };
 
     const act = async (action: 'approve' | 'reject') => {
         setBusy(action);
@@ -84,12 +117,43 @@ export function DecisionCard({post, compact = false}: {post: Post; compact?: boo
                     <button
                         type='button'
                         disabled={busy !== null}
+                        onClick={() => setChanging((c) => !c)}
+                        aria-expanded={changing}
+                        className='inline-flex h-8 items-center rounded-full px-3.5 text-[13px] font-semibold text-ink ring-1 ring-line transition-colors hover:bg-tint disabled:opacity-60'
+                    >
+                        Change it
+                    </button>
+                    <button
+                        type='button'
+                        disabled={busy !== null}
                         onClick={() => void act('reject')}
-                        className='inline-flex h-8 items-center rounded-full px-3.5 text-[13px] font-semibold text-text ring-1 ring-line transition-colors hover:bg-tint disabled:opacity-60'
+                        className='inline-flex h-8 items-center rounded-full px-3 text-[13px] font-semibold text-muted transition-colors hover:bg-tint hover:text-ink disabled:opacity-60'
                     >
                         {busy === 'reject' ? 'Rejecting…' : 'Reject'}
                     </button>
                 </div>
+            )}
+            {allowed && changing && (
+                <form
+                    className='mt-2 flex items-center gap-2'
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        void changeIt();
+                    }}
+                >
+                    <label className='sr-only' htmlFor={`change-${post.id}`}>What should change?</label>
+                    <input
+                        id={`change-${post.id}`}
+                        autoFocus
+                        value={change}
+                        onChange={(e) => setChange(e.target.value)}
+                        placeholder='What should change? Like "make it warmer"'
+                        className='h-9 min-w-0 flex-1 rounded-full bg-bg-subtle px-3.5 text-[13px] text-ink ring-1 ring-line outline-none focus:ring-2 focus:ring-accent'
+                    />
+                    <button type='submit' disabled={!change.trim() || busy !== null} className='inline-flex h-9 items-center rounded-full bg-accent px-4 text-[13px] font-bold text-on-accent disabled:opacity-50'>
+                        {busy === 'change' ? 'Sending…' : 'Send'}
+                    </button>
+                </form>
             )}
             {error && <p className='mt-2 text-[12px] text-alert'>{error}</p>}
         </div>

@@ -1,29 +1,49 @@
-// The floating talk button: a small face that stays on top of everything.
+// The floating Captain: a little Captain that stays on top of everything,
+// from the "Captain Lite — floating Captain" canvas.
 //
-// - Hold it (or hold the talk shortcut) to talk; let go to send.
-// - Tap it (or tap the shortcut) to start talking hands-free; tap again to send.
-// - Captain answers out loud, and the answer shows in a bubble (tap the bubble
-//   to open the conversation).
-// - Drag it anywhere. Right-click for options.
+// - Hold it (or hold the talk shortcut) to talk; let go to send. The talk card
+//   shows where it's going: the chat and agents you named, or Captain.
+// - Or switch the card to "Type into <app>": let go and Captain types what you
+//   said where your cursor is.
+// - Click it to unfold the card at the top right (what needs you, what's
+//   being worked on). Double-click to talk hands-free; click again to send.
+// - It shows what it's doing: listening, working (with the agents on it),
+//   speaking the answer, done. A gold count says how many things need you.
+// - Drag it anywhere; it settles on the nearest edge. Right-click for options.
 //
-// Listening and speaking go through the app's voice helper; the question is
-// sent from the dashboard window (lib/talk.ts), which holds the session.
+// Listening, speaking and typing go through the app's voice helper; requests
+// are posted by the dashboard window (lib/talk.ts), which holds the session.
 
-import {emitTo, listen} from '@tauri-apps/api/event';
 import {invoke} from '@tauri-apps/api/core';
-import {getCurrentWindow, PhysicalPosition, PhysicalSize} from '@tauri-apps/api/window';
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {emitTo, listen} from '@tauri-apps/api/event';
+import {currentMonitor, getCurrentWindow, PhysicalPosition, PhysicalSize} from '@tauri-apps/api/window';
+import {Check, ChevronDown, Hash, TextCursorInput, VolumeX, X} from 'lucide-react';
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 
+import {portraitSrc} from '../components/Avatar';
 import {getVoiceLang, setVoiceLang, type VoiceLang} from '../lib/dictation';
-import {isTauri, onVoice, openDashboard, speak, speakStop, voiceCancel, voiceStart, voiceStop} from '../lib/native';
-import type {TalkReply} from '../lib/talk';
+import {
+    ACCESSIBILITY_SETTINGS, type FrontApp, frontApp, isTauri, onVoice, openExternal, orbEscape, prettyKeys, showPanel,
+    shortcutsGet, speak, speakStop, typeInto, voiceCancel, voiceStart, voiceStop,
+} from '../lib/native';
+import {type DirectoryAgent, type OrbDirectory, type Route, routeFor} from '../lib/route';
+import {dictated, languageOf, spoken} from '../lib/spoken';
+import {type OrbState, type ReplyByVoice, type TalkReply, type TalkStep, targetFor} from '../lib/talk';
 
-type Phase = 'idle' | 'listening' | 'thinking' | 'speaking' | 'error';
-type Mode = 'hold' | 'handsfree' | 'key';
+import {Mascot, type MascotState} from './Mascot';
+
+type Phase = 'idle' | 'listening' | 'working' | 'done' | 'speaking';
+type TalkMode = 'chat' | 'type';
+type How = 'hold' | 'handsfree' | 'key';
+type Task = {id: string; where: string; lead: string; team: string[]; steps: TalkStep[]; channelId: string | null; rootId: string | null; sentAt: number};
+type Answer = {by: string; agentId: string | null; text: string; where: string; channelId: string; rootId: string | null; postId: string};
+type Notice = {text: string; tone: 'info' | 'error'; action?: {label: string; run: () => void}};
 
 const OWNER = 'orb';
-const ORB = 76; // the window's size with no bubble (logical px)
-const HOLD_MS = 220; // longer than this is a hold, shorter a tap
+const HOLD_MS = 220; // longer than this is a hold, shorter a click
+const DOUBLE_MS = 280; // a second click within this is a double-click
+const SENT_CARD_MS = 6000; // how long "Sent to …" stays before folding into the Captain
+const ANSWER_CARD_MS = 12_000;
 
 function readPref(key: string): string | null {
     try {
@@ -41,177 +61,279 @@ function writePref(key: string, value: string): void {
     }
 }
 
-// Speak the start of an answer, ending on a sentence.
-function spoken(text: string): string {
-    const clean = text.replace(/\s+/g, ' ').trim();
-    if (clean.length <= 600) {
-        return clean;
-    }
-    const cut = clean.slice(0, 600);
-    const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('。'), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
-    return end > 200 ? cut.slice(0, end + 1) : `${cut}…`;
-}
-
-function languageOf(text: string): VoiceLang {
-    const cjk = (text.match(/[㐀-鿿]/g) ?? []).length;
-    return cjk > text.length * 0.15 ? 'zh-CN' : 'en-US';
-}
-
-// Grow or shrink the window, keeping the button where it is (bottom right).
-async function resizeWindow(width: number, height: number): Promise<void> {
-    if (!isTauri) {
-        return;
-    }
-    const win = getCurrentWindow();
-    const [scale, pos, size] = await Promise.all([win.scaleFactor(), win.outerPosition(), win.outerSize()]);
-    const w = Math.round(width * scale);
-    const h = Math.round(height * scale);
-    if (w === size.width && h === size.height) {
-        return;
-    }
-    const right = pos.x + size.width;
-    const bottom = pos.y + size.height;
-    await win.setSize(new PhysicalSize(w, h));
-    await win.setPosition(new PhysicalPosition(right - w, bottom - h));
+function joinNames(names: string[]): string {
+    return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
 }
 
 export function Orb() {
     const [phase, setPhase] = useState<Phase>('idle');
-    const [bubble, setBubble] = useState<string | null>(null);
-    const [channelId, setChannelId] = useState<string | null>(null);
-    const [level, setLevel] = useState(0);
-    const [muted, setMuted] = useState(() => readPref('captain.orb.muted') === '1');
-    const [lang, setLang] = useState<VoiceLang>(getVoiceLang());
-    const mode = useRef<Mode>('hold');
     const phaseRef = useRef<Phase>('idle');
     phaseRef.current = phase;
-    const asking = useRef<string | null>(null);
-    const heard = useRef('');
-    const fade = useRef<number | undefined>(undefined);
-    const bubbleBox = useRef<HTMLDivElement>(null);
+    const [how, setHow] = useState<How>('hold');
+    const howRef = useRef<How>('hold');
+    const [mode, setModeState] = useState<TalkMode>(() => (readPref('captain.orb.mode') === 'type' ? 'type' : 'chat'));
+    const modeRef = useRef(mode);
+    modeRef.current = mode;
+    const [front, setFront] = useState<FrontApp | null>(null);
+    const frontRef = useRef<FrontApp | null>(null);
+    frontRef.current = front;
+    const [heard, setHeard] = useState('');
+    const heardRef = useRef('');
+    const [levels, setLevels] = useState<number[]>([]);
+    const [level, setLevel] = useState(0);
+    const [pick, setPick] = useState<Route | null>(null); // a chat chosen on the card
+    const pickRef = useRef<Route | null>(null);
+    pickRef.current = pick;
+    const [menu, setMenu] = useState(false);
+    const [task, setTask] = useState<Task | null>(null);
+    const taskRef = useRef<Task | null>(null);
+    taskRef.current = task;
+    const [answer, setAnswer] = useState<Answer | null>(null);
+    const [notice, setNotice] = useState<Notice | null>(null);
+    const [hover, setHover] = useState(false);
+    const [now, setNow] = useState(Date.now());
+    const [orb, setOrb] = useState<OrbState>({signedIn: false, needsYou: 0, directory: {channels: [], agents: []}});
+    const dirRef = useRef<OrbDirectory>(orb.directory);
+    dirRef.current = orb.directory;
+    const [muted, setMuted] = useState(() => readPref('captain.orb.muted') === '1');
+    const mutedRef = useRef(muted);
+    mutedRef.current = muted;
+    const [lang, setLang] = useState<VoiceLang>(getVoiceLang());
+    const [keys, setKeys] = useState({talk: '⌃⇧Space', panel: '⌃⇧C'});
+    const [side, setSide] = useState<'right' | 'left'>('right');
+    const cancelled = useRef(false);
+    const timers = useRef<{answer?: number; notice?: number; hover?: number; single?: number; done?: number}>({});
 
-    const show = useCallback((text: string | null, forMs?: number) => {
-        window.clearTimeout(fade.current);
-        setBubble(text);
-        if (text && forMs) {
-            fade.current = window.setTimeout(() => setBubble(null), forMs);
+    const setMode = (m: TalkMode) => {
+        setModeState(m);
+        writePref('captain.orb.mode', m);
+    };
+
+    const showNotice = useCallback((n: Notice | null, forMs?: number) => {
+        window.clearTimeout(timers.current.notice);
+        setNotice(n);
+        if (n && forMs) {
+            timers.current.notice = window.setTimeout(() => setNotice(null), forMs);
         }
     }, []);
 
-    // Size the window to the bubble.
-    useEffect(() => {
-        const el = bubbleBox.current;
-        if (!bubble || !el) {
-            void resizeWindow(ORB, ORB);
-            return;
-        }
-        // The bubble sits 72px from the right edge and 14px up (see app.css).
-        const r = el.getBoundingClientRect();
-        void resizeWindow(Math.ceil(r.width) + 82, Math.max(ORB, Math.ceil(r.height) + 24));
-    }, [bubble, phase]);
+    // ---------------------------------------------------------------- the workspace, via the dashboard window
 
-    const startListening = useCallback(async (how: Mode) => {
-        await speakStop();
-        mode.current = how;
-        heard.current = '';
-        setChannelId(null);
-        setPhase('listening');
-        show(how === 'handsfree' ? 'Listening… tap again to send' : 'Listening…');
-        try {
-            await voiceStart(lang, OWNER);
-        } catch (e) {
-            setPhase('error');
-            show(typeof e === 'string' ? e : 'Voice isn\'t available.', 5000);
+    useEffect(() => {
+        let un: (() => void) | undefined;
+        void listen<OrbState>('orb-state', (e) => setOrb(e.payload)).then((u) => {
+            un = u;
+        });
+        void emitTo('main', 'orb-hello', {}).catch(() => undefined);
+        void shortcutsGet().then((s) => s && setKeys({talk: prettyKeys(s.talk.keys), panel: prettyKeys(s.panel.keys)})).catch(() => undefined);
+        return () => un?.();
+    }, []);
+
+    // A clock for "Sent" folding away.
+    useEffect(() => {
+        if (!task) {
+            return undefined;
         }
-    }, [lang, show]);
+        const t = window.setInterval(() => setNow(Date.now()), 1000);
+        return () => window.clearInterval(t);
+    }, [task]);
+
+    // ---------------------------------------------------------------- listening
+
+    const startListening = useCallback(async (started: How) => {
+        await speakStop();
+        cancelled.current = false;
+        howRef.current = started;
+        setHow(started);
+        heardRef.current = '';
+        setHeard('');
+        setLevels([]);
+        setPick(null);
+        setMenu(false);
+        showNotice(null);
+        setAnswer(null);
+        setPhase('listening');
+        void frontApp().then((app) => {
+            setFront(app);
+            if (!app && modeRef.current === 'type') {
+                setModeState('chat');
+            }
+        });
+        try {
+            await voiceStart(getVoiceLang(), OWNER);
+        } catch (e) {
+            setPhase('idle');
+            showNotice({text: typeof e === 'string' ? e : 'Voice isn\'t available.', tone: 'error'}, 6000);
+        }
+    }, [showNotice]);
 
     const finishListening = useCallback(() => {
         void voiceStop();
     }, []);
 
-    const send = useCallback(async (text: string) => {
+    const cancelListening = useCallback(() => {
+        cancelled.current = true;
+        void voiceCancel();
+        setPhase('idle');
+    }, []);
+
+    const sendToChat = useCallback(async (text: string) => {
+        const route = pickRef.current ?? routeFor(text, dirRef.current);
         const id = crypto.randomUUID();
-        asking.current = id;
-        setPhase('thinking');
-        show(text);
-        await emitTo('main', 'talk-ask', {id, text});
-    }, [show]);
+        const where = route.reply && route.channel ? route.channel.name : route.channel ? `# ${route.channel.name}` : route.dmWith?.name ?? 'Captain';
+        setTask({id, where, lead: route.dmWith?.name ?? (route.agents.length === 1 ? route.agents[0].name : 'Captain'), team: route.agents.length > 1 ? route.agents.map((a) => a.handle) : [], steps: [], channelId: null, rootId: null, sentAt: Date.now()});
+        setPhase('working');
+        await emitTo('main', 'talk-ask', {id, text, target: targetFor(route)});
+    }, []);
+
+    const typeIt = useCallback(async (text: string) => {
+        const app = frontRef.current;
+        if (!app) {
+            await sendToChat(text);
+            return;
+        }
+        try {
+            await typeInto(app.pid, dictated(text));
+            setPhase('done');
+            showNotice({text: `Typed into ${app.name}`, tone: 'info'}, 2200);
+            window.clearTimeout(timers.current.done);
+            timers.current.done = window.setTimeout(() => setPhase((p) => (p === 'done' ? 'idle' : p)), 1400);
+        } catch (e) {
+            setPhase('idle');
+            const message = typeof e === 'string' ? e : (e as Error)?.message ?? 'Couldn\'t type it.';
+            const needsAccess = /accessibility/i.test(message);
+            showNotice({
+                text: message,
+                tone: 'error',
+                action: needsAccess ? {label: 'Open Accessibility settings', run: () => void openExternal(ACCESSIBILITY_SETTINGS)} : undefined,
+            });
+        }
+    }, [sendToChat, showNotice]);
 
     // What the microphone hears.
     useEffect(() => onVoice(OWNER, (e) => {
         if (e.type === 'level') {
             setLevel(e.value);
-        } else if (e.type === 'partial') {
-            heard.current = e.text;
-            show(e.text);
-        } else if (e.type === 'final') {
-            heard.current = e.text.trim();
+            setLevels((l) => [...l.slice(-23), e.value]);
+        } else if (e.type === 'partial' || e.type === 'final') {
+            heardRef.current = e.text.trim();
+            setHeard(e.text);
         } else if (e.type === 'error') {
-            setPhase('error');
-            show(e.message, 6000);
+            setPhase('idle');
+            showNotice({text: e.message, tone: 'error'}, 8000);
         } else if (e.type === 'end') {
             setLevel(0);
             if (phaseRef.current !== 'listening') {
                 return;
             }
-            if (heard.current) {
-                void send(heard.current);
-            } else {
+            if (cancelled.current) {
                 setPhase('idle');
-                show('I didn\'t catch that.', 2500);
+                return;
+            }
+            const text = heardRef.current;
+            if (!text) {
+                setPhase('idle');
+                showNotice({text: 'I didn\'t catch that.', tone: 'info'}, 2500);
+            } else if (modeRef.current === 'type') {
+                void typeIt(text);
+            } else {
+                void sendToChat(text);
             }
         }
-    }), [send, show]);
+    }), [sendToChat, showNotice, typeIt]);
 
-    // Captain's answer, from the dashboard window.
+    // ---------------------------------------------------------------- what came back
+
+    const sayAnswer = useCallback(async (text: string) => {
+        setPhase('speaking');
+        await speak(spoken(text), languageOf(text)).catch(() => undefined);
+        if (phaseRef.current === 'speaking') {
+            setPhase('idle');
+        }
+    }, []);
+
     useEffect(() => {
         let un: (() => void) | undefined;
-        void listen<TalkReply>('talk-reply', async (e) => {
+        void listen<TalkReply>('talk-reply', (e) => {
             const r = e.payload;
-            if (r.id !== asking.current) {
+            const t = taskRef.current;
+            if (!t || r.id !== t.id) {
                 return;
             }
-            if (r.channelId) {
-                setChannelId(r.channelId);
-            }
-            if (r.type === 'thinking') {
-                return;
-            }
-            asking.current = null;
-            if (r.type === 'error') {
-                setPhase('error');
-                show(r.text ?? 'Something went wrong.', 7000);
-                return;
-            }
-            const text = r.text ?? '';
-            show(text.length > 280 ? `${text.slice(0, 280)}…` : text);
-            if (muted || !text) {
+            if (r.type === 'replied') {
+                setTask(null);
+                setPhase('done');
+                showNotice({text: `Replied in ${r.where}`, tone: 'info'}, 2500);
+                window.clearTimeout(timers.current.done);
+                timers.current.done = window.setTimeout(() => setPhase((p) => (p === 'done' ? 'idle' : p)), 1400);
+            } else if (r.type === 'sent') {
+                setTask({...t, where: r.where, lead: r.lead, team: r.team, channelId: r.channelId, rootId: r.rootId});
+            } else if (r.type === 'progress') {
+                setTask({...t, steps: r.steps});
+            } else if (r.type === 'answer') {
+                setTask(null);
+                setAnswer({by: r.by, agentId: r.agentId, text: r.text, where: t.where, channelId: r.channelId, rootId: r.rootId, postId: r.postId});
+                window.clearTimeout(timers.current.answer);
+                timers.current.answer = window.setTimeout(() => setAnswer(null), ANSWER_CARD_MS + Math.min(40_000, r.text.length * 60));
+                setPhase('done');
+                window.clearTimeout(timers.current.done);
+                timers.current.done = window.setTimeout(() => {
+                    if (phaseRef.current !== 'done') {
+                        return;
+                    }
+                    if (mutedRef.current || !r.text) {
+                        setPhase('idle');
+                    } else {
+                        void sayAnswer(r.text);
+                    }
+                }, 1300);
+            } else if (r.type === 'decision') {
+                setTask(null);
                 setPhase('idle');
-                show(text.length > 280 ? `${text.slice(0, 280)}…` : text, 12000);
-                return;
-            }
-            setPhase('speaking');
-            await speak(spoken(text), languageOf(text)).catch(() => undefined);
-            if (phaseRef.current === 'speaking') {
+                showNotice({text: `Needs your OK: ${r.text}`, tone: 'info', action: {label: 'Decide', run: () => void showPanel({mode: 'thread', channelId: r.channelId, postId: r.postId})}});
+            } else if (r.type === 'error') {
+                setTask(null);
                 setPhase('idle');
-                show(text.length > 280 ? `${text.slice(0, 280)}…` : text, 6000);
+                showNotice({text: r.text, tone: 'error', action: r.channelId ? {label: 'Open', run: () => void showPanel({mode: 'thread', channelId: r.channelId!})} : undefined}, 9000);
             }
         }).then((u) => {
             un = u;
         });
         return () => un?.();
-    }, [muted, show]);
+    }, [sayAnswer, showNotice]);
+
+    // "Reply by voice" on the card at the top right.
+    useEffect(() => {
+        let un: (() => void) | undefined;
+        void listen<ReplyByVoice>('orb-reply', (e) => {
+            const r = e.payload;
+            setModeState('chat');
+            void startListening('handsfree').then(() => setPick({channel: {id: r.channelId, name: r.where}, agents: [], dmWith: null, reply: {rootId: r.rootId}}));
+        }).then((u) => {
+            un = u;
+        });
+        return () => un?.();
+    }, [startListening]);
+
+    // The microphone on the card at the top right: talk hands-free.
+    useEffect(() => {
+        let un: (() => void) | undefined;
+        void listen('orb-talk', () => void startListening('handsfree')).then((u) => {
+            un = u;
+        });
+        return () => un?.();
+    }, [startListening]);
+
+    // ---------------------------------------------------------------- keys
 
     // The talk shortcut: hold to talk, or tap to start and tap again to send.
     const keyDownAt = useRef(0);
     useEffect(() => {
         let un: (() => void) | undefined;
         void listen<boolean>('talk-key', (e) => {
-            const pressed = e.payload;
-            const p = phaseRef.current;
-            if (pressed) {
+            if (e.payload) {
                 keyDownAt.current = Date.now();
-                if (p === 'listening') {
+                if (phaseRef.current === 'listening') {
                     finishListening();
                     keyDownAt.current = 0;
                 } else {
@@ -223,15 +345,41 @@ export function Orb() {
                 if (held) {
                     finishListening();
                 } else {
-                    mode.current = 'handsfree';
-                    show('Listening… press the keys again to send');
+                    howRef.current = 'handsfree';
+                    setHow('handsfree');
                 }
             }
         }).then((u) => {
             un = u;
         });
         return () => un?.();
-    }, [finishListening, startListening, show]);
+    }, [finishListening, startListening]);
+
+    // Esc cancels listening or stops speaking, in any app (while it matters).
+    useEffect(() => {
+        const active = phase === 'listening' || phase === 'speaking';
+        void orbEscape(active);
+    }, [phase]);
+    useEffect(() => {
+        const onEscape = () => {
+            if (phaseRef.current === 'listening') {
+                cancelListening();
+            } else if (phaseRef.current === 'speaking') {
+                void speakStop();
+                setPhase('idle');
+            }
+        };
+        const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onEscape();
+        window.addEventListener('keydown', onKey);
+        let un: (() => void) | undefined;
+        void listen('orb-escape', onEscape).then((u) => {
+            un = u;
+        });
+        return () => {
+            window.removeEventListener('keydown', onKey);
+            un?.();
+        };
+    }, [cancelListening]);
 
     // Right-click options.
     useEffect(() => {
@@ -246,7 +394,7 @@ export function Orb() {
                 setLang((l) => {
                     const next: VoiceLang = l === 'zh-CN' ? 'en-US' : 'zh-CN';
                     setVoiceLang(next);
-                    show(next === 'zh-CN' ? '我会听中文' : 'Listening in English', 2000);
+                    showNotice({text: next === 'zh-CN' ? '我会听中文' : 'Listening in English', tone: 'info'}, 2000);
                     return next;
                 });
             }
@@ -254,18 +402,79 @@ export function Orb() {
             un = u;
         });
         return () => un?.();
-    }, [show]);
+    }, [showNotice]);
 
-    // Remember where it was dragged to.
+    // ---------------------------------------------------------------- the window
+
+    const selfMoveUntil = useRef(0);
+    const wrap = useRef<HTMLDivElement>(null);
+
+    // Fit the window to what's showing, keeping the Captain where it is.
+    useLayoutEffect(() => {
+        const el = wrap.current;
+        if (!el || !isTauri) {
+            return undefined;
+        }
+        const fit = async () => {
+            const r = el.getBoundingClientRect();
+            const win = getCurrentWindow();
+            const [scale, pos, size] = await Promise.all([win.scaleFactor(), win.outerPosition(), win.outerSize()]);
+            const w = Math.ceil(r.width * scale);
+            const h = Math.ceil(r.height * scale);
+            if (w === size.width && h === size.height) {
+                return;
+            }
+            const x = side === 'right' ? pos.x + size.width - w : pos.x;
+            const y = pos.y + size.height - h;
+            selfMoveUntil.current = Date.now() + 800;
+            await win.setSize(new PhysicalSize(w, h));
+            await win.setPosition(new PhysicalPosition(x, y));
+        };
+        const ro = new ResizeObserver(() => void fit());
+        ro.observe(el);
+        void fit();
+        return () => ro.disconnect();
+    }, [side]);
+
+    // After a drag: settle on the nearest side edge, on screen, and remember it.
+    const settle = useCallback(async () => {
+        if (!isTauri) {
+            return;
+        }
+        const win = getCurrentWindow();
+        const mon = await currentMonitor();
+        if (!mon) {
+            return;
+        }
+        const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+        const margin = Math.round(4 * mon.scaleFactor);
+        const left = mon.position.x;
+        const right = mon.position.x + mon.size.width;
+        const toLeft = pos.x + size.width / 2 < left + mon.size.width / 2;
+        const x = toLeft ? left + margin : right - size.width - margin;
+        const top = mon.position.y + Math.round(30 * mon.scaleFactor);
+        const y = Math.min(Math.max(pos.y, top), mon.position.y + mon.size.height - size.height);
+        if (x !== pos.x || y !== pos.y) {
+            selfMoveUntil.current = Date.now() + 800;
+            await win.setPosition(new PhysicalPosition(x, y));
+        }
+        setSide(toLeft ? 'left' : 'right');
+        void invoke('orb_moved').catch(() => undefined);
+    }, []);
+
     useEffect(() => {
         if (!isTauri) {
             return undefined;
         }
+        void settle();
         let timer: number | undefined;
         let un: (() => void) | undefined;
         void getCurrentWindow().onMoved(() => {
+            if (Date.now() < selfMoveUntil.current) {
+                return;
+            }
             window.clearTimeout(timer);
-            timer = window.setTimeout(() => void invoke('orb_moved'), 500);
+            timer = window.setTimeout(() => void settle(), 450);
         }).then((u) => {
             un = u;
         });
@@ -273,19 +482,30 @@ export function Orb() {
             window.clearTimeout(timer);
             un?.();
         };
-    }, []);
+    }, [settle]);
 
-    // Press: hold to talk, tap to toggle, drag to move.
-    const press = useRef<{x: number; y: number; at: number; timer: number; dragging: boolean; started: boolean} | null>(null);
+    // ---------------------------------------------------------------- the Captain: hold, click, double-click, drag
+
+    const press = useRef<{x: number; y: number; timer: number; dragging: boolean; started: boolean} | null>(null);
+    const lastClick = useRef(0);
+
+    const openCard = () => void showPanel({mode: 'inbox'});
 
     const onPointerDown = (e: React.PointerEvent) => {
         if (e.button !== 0) {
             return;
         }
-        const p = {x: e.screenX, y: e.screenY, at: Date.now(), timer: 0, dragging: false, started: false};
-        if (phaseRef.current === 'idle' || phaseRef.current === 'error') {
+        const p = {x: e.screenX, y: e.screenY, timer: 0, dragging: false, started: false};
+        // Keep getting this press's events while the window grows around it.
+        try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+            // fine without
+        }
+        if (phaseRef.current !== 'listening') {
             p.timer = window.setTimeout(() => {
                 p.started = true;
+                window.clearTimeout(timers.current.single);
                 void startListening('hold');
             }, HOLD_MS);
         }
@@ -300,6 +520,11 @@ export function Orb() {
         if (Math.hypot(e.screenX - p.x, e.screenY - p.y) > 5) {
             window.clearTimeout(p.timer);
             p.dragging = true;
+            try {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+            } catch {
+                // not captured
+            }
             if (isTauri) {
                 void getCurrentWindow().startDragging();
             }
@@ -317,16 +542,26 @@ export function Orb() {
             finishListening(); // let go: send
             return;
         }
-        // A tap.
-        const now = phaseRef.current;
-        if (now === 'idle' || now === 'error') {
-            void startListening('handsfree');
-        } else if (now === 'listening') {
-            finishListening();
-        } else if (now === 'speaking') {
+        // A click.
+        if (phaseRef.current === 'listening') {
+            finishListening(); // hands-free: click again to send
+            return;
+        }
+        if (phaseRef.current === 'speaking') {
             void speakStop();
             setPhase('idle');
+            return;
         }
+        const at = Date.now();
+        if (at - lastClick.current < DOUBLE_MS) {
+            lastClick.current = 0;
+            window.clearTimeout(timers.current.single);
+            void startListening('handsfree');
+            return;
+        }
+        lastClick.current = at;
+        window.clearTimeout(timers.current.single);
+        timers.current.single = window.setTimeout(openCard, DOUBLE_MS);
     };
 
     const onContextMenu = (e: React.MouseEvent) => {
@@ -336,60 +571,266 @@ export function Orb() {
         }
     };
 
-    // Esc stops whatever it's doing.
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape') {
-                return;
-            }
-            if (phaseRef.current === 'listening') {
-                void voiceCancel();
-                setPhase('idle');
-                show(null);
-            } else if (phaseRef.current === 'speaking') {
-                void speakStop();
-                setPhase('idle');
-            }
-        };
-        window.addEventListener('keydown', onKey);
-        return () => window.removeEventListener('keydown', onKey);
-    }, [show]);
+    // Hovering: the hint at rest, or what's being worked on.
+    const onEnter = () => {
+        window.clearTimeout(timers.current.hover);
+        timers.current.hover = window.setTimeout(() => setHover(true), 380);
+    };
+    const onLeave = () => {
+        window.clearTimeout(timers.current.hover);
+        timers.current.hover = window.setTimeout(() => setHover(false), 250);
+    };
 
-    const title = phase === 'listening' ? 'Listening: let go or tap to send' : phase === 'thinking' ? 'Captain is thinking' : phase === 'speaking' ? 'Tap to stop' : 'Hold to talk to Captain · tap for hands-free · right-click for options';
+    // ---------------------------------------------------------------- what shows
+
+    const live = useMemo(() => pick ?? routeFor(heard, orb.directory), [pick, heard, orb.directory]);
+    const agentById = (id: string | null | undefined): DirectoryAgent | undefined => orb.directory.agents.find((a) => a.id === id);
+    const agentByName = (name: string): DirectoryAgent | undefined => orb.directory.agents.find((a) => a.name === name);
+    const captain = orb.directory.agents.find((a) => a.isCoordinator);
+
+    const mascot: MascotState = phase === 'listening' ? 'listening' : phase === 'speaking' ? 'speaking' : phase === 'done' ? 'done' : task ? 'working' : orb.needsYou > 0 ? 'needs' : 'idle';
+    const sentFresh = task ? now - task.sentAt < SENT_CARD_MS : false;
+    const card: 'talk' | 'notice' | 'answer' | 'sent' | 'hint' | null =
+        phase === 'listening' ? 'talk' :
+            notice ? 'notice' :
+                answer ? 'answer' :
+                    task && (sentFresh || hover) ? 'sent' :
+                        hover && phase === 'idle' ? 'hint' : null;
+    // While it works, the agents on it peek out beside the Captain.
+    const teamFaces = (task && card !== 'sent' ? (task.team.length ? task.team.map((h) => orb.directory.agents.find((a) => a.handle === h)) : [agentByName(task.lead)]) : []).
+        filter((a): a is DirectoryAgent => Boolean(a && !a.isCoordinator)).slice(0, 3);
+    const label = phase === 'listening' ? 'Captain is listening. Let go to send.' : task ? 'Captain is working. Hover to see how it\'s going.' : `Captain: hold to talk, click to open.${orb.needsYou ? ` ${orb.needsYou} need you.` : ''}`;
+    const sendWord = mode === 'type' ? 'type it' : 'send';
+    const sendHint = how === 'hold' ? `Let go to ${sendWord}` : how === 'key' ? `Let go to ${sendWord}` : `Click again to ${sendWord}`;
 
     return (
-        <div className='orb-stage'>
-            {bubble && (
-                <div
-                    ref={bubbleBox}
-                    className={`orb-bubble ${phase === 'error' ? 'orb-bubble-error' : ''}`}
-                    onClick={() => channelId && void openDashboard(channelId)}
-                    title={channelId ? 'Open the conversation' : undefined}
+        <div className='fc-stage'>
+            <div ref={wrap} className={`fc-wrap ${side === 'left' ? 'fc-left' : ''}`} onPointerEnter={onEnter} onPointerLeave={onLeave}>
+                {card === 'hint' && (
+                    <div className='fc-pill'>
+                        <span>Hold to talk</span>
+                        <span className='fc-kbd'>{keys.talk}</span>
+                        <span className='fc-dot' aria-hidden/>
+                        <span>Click to open</span>
+                        <span className='fc-kbd'>{keys.panel}</span>
+                        {orb.needsYou > 0 && <><span className='fc-dot' aria-hidden/><span>{orb.needsYou} need{orb.needsYou === 1 ? 's' : ''} you</span></>}
+                    </div>
+                )}
+
+                {card === 'talk' && (
+                    <div className='fc-card' style={{width: 520}}>
+                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12}}>
+                            <div className='fc-seg' role='group' aria-label='Where it goes'>
+                                <button type='button' aria-pressed={mode === 'chat'} onPointerDown={(e) => e.stopPropagation()} onClick={() => setMode('chat')}>To a chat</button>
+                                <button type='button' aria-pressed={mode === 'type'} disabled={!front} onPointerDown={(e) => e.stopPropagation()} onClick={() => setMode('type')}>
+                                    {front ? `Type into ${front.name}` : 'Type into an app'}
+                                </button>
+                            </div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 800, color: '#4f5c78'}}>
+                                <span className='fc-live' aria-hidden/>
+                                <span>Listening</span>
+                                <span className='fc-kbd'>{lang === 'zh-CN' ? '中文' : 'EN'}</span>
+                            </div>
+                        </div>
+                        {mode === 'chat' ? (
+                            <div style={{display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, fontSize: 13.5, fontWeight: 700}}>
+                                {pick?.reply ? (
+                                    <>
+                                        <span style={{color: '#4f5c78'}}>Reply in</span>
+                                        <span className='fc-chip'>{pick.channel?.name}</span>
+                                    </>
+                                ) : <>
+                                <span style={{color: '#4f5c78'}}>To</span>
+                                <button type='button' className='fc-chip' onPointerDown={(e) => e.stopPropagation()} onClick={() => setMenu((m) => !m)} aria-expanded={menu}>
+                                    {live.channel ? (
+                                        <><Hash size={14} color='#3a6fd8' strokeWidth={2.4}/>{live.channel.name}</>
+                                    ) : (
+                                        <><img src={portraitSrc(live.dmWith?.portrait ?? captain?.portrait, live.dmWith?.handle ?? 'captain')} alt=''/>{live.dmWith?.name ?? 'Captain'}</>
+                                    )}
+                                    <ChevronDown size={14} color='#4f5c78'/>
+                                </button>
+                                {live.agents.length > 0 && (live.channel || live.agents.length > 1) && (
+                                    <>
+                                        <span style={{color: '#4f5c78'}}>with</span>
+                                        {live.agents.map((a) => (
+                                            <span key={a.id} className='fc-chip'><img src={portraitSrc(a.portrait, a.handle)} alt=''/>{a.name}</span>
+                                        ))}
+                                    </>
+                                )}
+                                <span style={{fontSize: 12.5, fontWeight: 600, color: '#5d6a85'}}>
+                                    {pick ? 'your pick' : live.channel || live.agents.length ? 'picked from what you said' : 'name a chat or an agent to send it there'}
+                                </span>
+                                </>}
+                            </div>
+                        ) : (
+                            <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
+                                <span className='fc-icon-tile'><TextCursorInput size={18}/></span>
+                                <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+                                    <span style={{fontSize: 15.5, fontWeight: 800}}>Typing where your cursor is</span>
+                                    <span style={{fontSize: 13, lineHeight: '19px', fontWeight: 600, color: '#4f5c78'}}>
+                                        When you let go, Captain types it into {front?.name ?? 'the app in front'}. Say &ldquo;new line&rdquo; for a new line, or &ldquo;scratch that&rdquo; to drop the last sentence.
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                        {menu && mode === 'chat' && (
+                            <div role='listbox' aria-label='Send to' style={{display: 'flex', flexWrap: 'wrap', gap: 6, padding: 8, borderRadius: 14, background: 'rgba(20, 39, 105, 0.04)'}}>
+                                <button type='button' className='fc-chip' onPointerDown={(e) => e.stopPropagation()} onClick={() => {
+                                    setPick({channel: null, agents: live.agents, dmWith: live.agents.length === 1 ? live.agents[0] : captain ?? null});
+                                    setMenu(false);
+                                }}>
+                                    <img src={portraitSrc(captain?.portrait, 'captain')} alt=''/>Captain
+                                </button>
+                                {orb.directory.channels.slice(0, 10).map((c) => (
+                                    <button key={c.id} type='button' className='fc-chip' onPointerDown={(e) => e.stopPropagation()} onClick={() => {
+                                        setPick({channel: c, agents: live.agents, dmWith: null});
+                                        setMenu(false);
+                                    }}>
+                                        <Hash size={14} color='#3a6fd8' strokeWidth={2.4}/>{c.name}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        <p className='fc-said'>
+                            {heard ? heard : <span className='fc-soft'>{lang === 'zh-CN' ? '请说…' : 'Say what you need…'}</span>}
+                            <span className='fc-caret' aria-hidden/>
+                        </p>
+                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16}}>
+                            <div className='fc-bars' aria-hidden>
+                                {Array.from({length: 24}, (_, i) => {
+                                    const v = levels[levels.length - 24 + i] ?? 0;
+                                    const fade = i > 20 ? 0.35 + (23 - i) * 0.2 : 1;
+                                    return <span key={i} style={{height: 4 + v * 22, opacity: levels.length ? fade : 0.3}}/>;
+                                })}
+                            </div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap'}} className='fc-muted-text'>
+                                <span>{sendHint}</span>
+                                <span className='fc-dot' aria-hidden/>
+                                <span className='fc-kbd'>esc</span>
+                                <span>to cancel</span>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {card === 'sent' && task && <SentCard task={task} directory={orb.directory}/>}
+
+                {card === 'answer' && answer && (
+                    <div className='fc-card' style={{width: 380}}>
+                        <div style={{display: 'flex', alignItems: 'center', gap: 10}}>
+                            <img src={portraitSrc(agentById(answer.agentId)?.portrait, agentById(answer.agentId)?.handle ?? 'captain')} alt='' style={{width: 30, height: 30, borderRadius: 9999, background: '#fff', boxShadow: '0 0 0 1px rgba(20,39,105,0.08)'}}/>
+                            <div style={{display: 'flex', flexDirection: 'column', minWidth: 0}}>
+                                <span style={{fontSize: 14, fontWeight: 800}}>{answer.by}</span>
+                                <span style={{fontSize: 12, fontWeight: 600, color: '#4f5c78'}}>{answer.where.startsWith('#') ? `in ${answer.where}` : 'in your direct message'}</span>
+                            </div>
+                            <button type='button' className='fc-x' aria-label='Dismiss' onPointerDown={(e) => e.stopPropagation()} onClick={() => setAnswer(null)}><X size={15}/></button>
+                        </div>
+                        <p className='fc-answer'>{answer.text}</p>
+                        <div style={{display: 'flex', gap: 8}}>
+                            <button type='button' className='fc-btn fc-btn-primary' onPointerDown={(e) => e.stopPropagation()} onClick={() => void showPanel({mode: 'thread', channelId: answer.channelId, postId: answer.rootId ?? answer.postId})}>Open</button>
+                            {phase === 'speaking' ? (
+                                <button type='button' className='fc-btn fc-btn-ghost' onPointerDown={(e) => e.stopPropagation()} onClick={() => {
+                                    void speakStop();
+                                    setPhase('idle');
+                                }}>Stop reading</button>
+                            ) : (
+                                <button type='button' className='fc-btn fc-btn-ghost' onPointerDown={(e) => e.stopPropagation()} onClick={() => void sayAnswer(answer.text)}>Read it to me</button>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                {card === 'notice' && notice && (
+                    <div className='fc-card' style={{width: 340, gap: 10}}>
+                        <div style={{display: 'flex', alignItems: 'flex-start', gap: 10}}>
+                            {notice.tone === 'info' && phase === 'done' && <span className='fc-check' style={{width: 24, height: 24}}><Check size={14} strokeWidth={3}/></span>}
+                            <span className={notice.tone === 'error' ? 'fc-error' : ''} style={{fontSize: 13.5, lineHeight: '19px', fontWeight: 700, flex: 1}}>{notice.text}</span>
+                            <button type='button' className='fc-x' aria-label='Dismiss' onPointerDown={(e) => e.stopPropagation()} onClick={() => showNotice(null)}><X size={15}/></button>
+                        </div>
+                        {notice.action && (
+                            <div>
+                                <button type='button' className='fc-btn fc-btn-primary' onPointerDown={(e) => e.stopPropagation()} onClick={() => {
+                                    notice.action!.run();
+                                    showNotice(null);
+                                }}>{notice.action.label}</button>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                <button
+                    type='button'
+                    aria-label={label}
+                    title={label}
+                    className='fc-captain'
+                    onPointerDown={onPointerDown}
+                    onPointerMove={onPointerMove}
+                    onPointerUp={onPointerUp}
+                    onContextMenu={onContextMenu}
                 >
-                    {bubble}
+                    <span className='fc-body'><Mascot state={mascot} level={level}/></span>
+                    {teamFaces.map((a, i) => (
+                        <img key={a.id} className='fc-team' src={portraitSrc(a.portrait, a.handle)} alt='' style={side === 'right' ? {left: -8 + i * 4, top: 8 + i * 30} : {right: -8 + i * 4, top: 8 + i * 30}}/>
+                    ))}
+                    {orb.needsYou > 0 && phase !== 'listening' && <span className='fc-badge'>{orb.needsYou > 9 ? '9+' : orb.needsYou}</span>}
+                    {muted && <span className='fc-muted' title='Spoken answers are off'><VolumeX size={12}/></span>}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+const STEP_STATUS: Record<string, {label: string; color: string}> = {
+    succeeded: {label: 'Done', color: '#2a56b8'},
+    running: {label: 'Working', color: '#4f5c78'},
+    waiting_approval: {label: 'Needs your OK', color: '#9a6a1f'},
+    failed: {label: 'Didn\'t finish', color: '#b02a45'},
+    pending: {label: 'Up next', color: '#7d89a3'},
+    skipped: {label: 'Skipped', color: '#7d89a3'},
+    cancelled: {label: 'Stopped', color: '#7d89a3'},
+};
+
+function SentCard({task, directory}: {task: Task; directory: OrbDirectory}) {
+    const agent = (id: string) => directory.agents.find((a) => a.id === id);
+    const done = task.steps.filter((s) => s.status === 'succeeded').length;
+    const lead = directory.agents.find((a) => a.name === task.lead);
+    const subtitle = task.team.length > 1 ?
+        `Captain is coordinating ${joinNames(task.team.map((h) => `@${h}`))}` :
+        task.lead === 'Captain' ? (task.steps.length ? `Captain split it into ${task.steps.length} steps` : 'Captain is working out who helps') : `${task.lead} is on it`;
+    return (
+        <div className='fc-card' style={{width: 420}}>
+            <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
+                <span className='fc-check'><Check size={16} strokeWidth={2.6}/></span>
+                <div style={{display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0}}>
+                    <span style={{fontSize: 15.5, fontWeight: 800}}>Sent to {task.where}</span>
+                    <span style={{fontSize: 13, fontWeight: 600, color: '#4f5c78'}}>{subtitle}</span>
                 </div>
-            )}
-            <button
-                type='button'
-                aria-label={title}
-                title={title}
-                className={`orb orb-${phase}`}
-                style={{'--level': level} as React.CSSProperties}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onContextMenu={onContextMenu}
-            >
-                <span className='orb-ring'/>
-                <span className='orb-face'>
-                    <span className='orb-eye'/>
-                    <span className='orb-eye'/>
-                </span>
-                <span className='orb-mouth'>
-                    {[0, 1, 2, 3].map((i) => <span key={i} style={{animationDelay: `${i * 110}ms`}}/>)}
-                </span>
-                {muted && <span className='orb-muted' aria-hidden>🔇</span>}
-            </button>
+            </div>
+            {task.steps.length > 0 && <div className='fc-progress'><div style={{width: `${Math.max(6, (done / task.steps.length) * 100)}%`}}/></div>}
+            <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                {task.steps.length > 0 ? task.steps.slice(0, 5).map((s, i) => {
+                    const a = agent(s.agentId);
+                    const st = STEP_STATUS[s.status] ?? STEP_STATUS.pending;
+                    return (
+                        <div key={i} className='fc-step'>
+                            <img src={portraitSrc(a?.portrait, a?.handle)} alt={a?.name ?? ''}/>
+                            <span className='fc-step-title'>{s.title}</span>
+                            <span style={{display: 'flex', alignItems: 'center', gap: 5, fontSize: 12.5, fontWeight: 700, color: st.color}}>
+                                {s.status === 'succeeded' && <Check size={14} strokeWidth={2.6}/>}
+                                {st.label}
+                                {s.status === 'running' && <span className='fc-typing' aria-hidden><span/><span style={{animationDelay: '0.2s'}}/><span style={{animationDelay: '0.4s'}}/></span>}
+                            </span>
+                        </div>
+                    );
+                }) : (
+                    <div className='fc-step'>
+                        <img src={portraitSrc(lead?.portrait, lead?.handle ?? 'captain')} alt=''/>
+                        <span className='fc-step-title'>{task.lead === 'Captain' && task.team.length > 1 ? 'Planning who does what' : `${task.lead} is writing`}</span>
+                        <span className='fc-typing' aria-hidden><span/><span style={{animationDelay: '0.2s'}}/><span style={{animationDelay: '0.4s'}}/></span>
+                    </div>
+                )}
+            </div>
+            <div className='fc-foot'>Keep working. Captain taps you when it&apos;s ready.</div>
         </div>
     );
 }

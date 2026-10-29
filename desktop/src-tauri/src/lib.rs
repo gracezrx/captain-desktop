@@ -158,7 +158,9 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     let lower = url.to_ascii_lowercase();
-    if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:")) {
+    // Web and email links, and the Privacy & Security pages of System Settings.
+    let settings = lower.starts_with("x-apple.systempreferences:com.apple.preference.security");
+    if !(lower.starts_with("https://") || lower.starts_with("http://") || lower.starts_with("mailto:") || settings) {
         return Err("Only web and email links open from Captain.".into());
     }
     #[cfg(target_os = "macos")]
@@ -692,6 +694,8 @@ fn save_settings(app: &AppHandle) {
 struct Keys {
     panel: Mutex<Option<Shortcut>>,
     talk: Mutex<Option<Shortcut>>,
+    /// Esc, held only while the floating Captain listens or speaks.
+    escape: Mutex<Option<Shortcut>>,
     status: Mutex<std::collections::HashMap<String, ShortcutStatus>>,
 }
 
@@ -779,6 +783,24 @@ fn shortcut_set(app: AppHandle, kind: String, keys: String) -> ShortcutStatus {
         save_settings(&app);
     }
     status
+}
+
+/// While the floating Captain listens or speaks, Esc (in any app) cancels.
+#[tauri::command]
+fn orb_escape(app: AppHandle, active: bool) {
+    let keys = app.state::<Keys>();
+    let mut slot = keys.escape.lock().unwrap();
+    if active {
+        if slot.is_none() {
+            if let Ok(shortcut) = Shortcut::from_str("Escape") {
+                if app.global_shortcut().register(shortcut).is_ok() {
+                    *slot = Some(shortcut);
+                }
+            }
+        }
+    } else if let Some(shortcut) = slot.take() {
+        let _ = app.global_shortcut().unregister(shortcut);
+    }
 }
 
 /// The talk shortcut went down or up: the floating button handles it (hold
@@ -925,6 +947,55 @@ fn speak_stop(app: AppHandle) {
     }
 }
 
+// ------------------------------------------------------------ voice typing
+//
+// "Type into <app>" on the talk card: the helper finds the app in front of
+// Captain, and later pastes what was said there (with Accessibility permission).
+
+#[derive(Serialize)]
+struct FrontAppInfo {
+    name: String,
+    pid: i32,
+}
+
+#[tauri::command]
+async fn front_app() -> Option<FrontAppInfo> {
+    let out = Command::new(voice_helper().ok()?).arg("frontapp").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value = serde_json::from_str(text.lines().last()?.trim()).ok()?;
+    if value["type"] != "app" {
+        return None;
+    }
+    Some(FrontAppInfo { name: value["name"].as_str()?.to_string(), pid: value["pid"].as_i64()? as i32 })
+}
+
+#[tauri::command]
+async fn type_text(pid: i32, text: String) -> Result<(), String> {
+    let mut child = Command::new(voice_helper()?)
+        .args(["paste", &pid.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't type it: {e}"))?;
+    if let Some(mut input) = child.stdin.take() {
+        let _ = input.write_all(text.as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value["type"] == "error" {
+                return Err(value["message"].as_str().unwrap_or("Couldn't type it.").to_string());
+            }
+        }
+    }
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err("Couldn't type it.".into())
+    }
+}
+
 // ------------------------------------------------------------ floating talk button
 
 fn orb(app: &AppHandle) -> Option<WebviewWindow> {
@@ -1023,7 +1094,14 @@ pub fn run() {
                     let keys = app.state::<Keys>();
                     let is_panel = *keys.panel.lock().unwrap() == Some(*pressed);
                     let is_talk = *keys.talk.lock().unwrap() == Some(*pressed);
-                    if is_panel && event.state() == ShortcutState::Pressed {
+                    let is_escape = *keys.escape.lock().unwrap() == Some(*pressed);
+                    if is_escape {
+                        if event.state() == ShortcutState::Pressed {
+                            if let Some(window) = orb(app) {
+                                let _ = window.emit("orb-escape", ());
+                            }
+                        }
+                    } else if is_panel && event.state() == ShortcutState::Pressed {
                         toggle_panel(app, PanelTarget::mode("compose"));
                     } else if is_talk {
                         talk_key(app, event.state() == ShortcutState::Pressed);
@@ -1058,6 +1136,9 @@ pub fn run() {
             speak_stop,
             orb_menu,
             orb_moved,
+            orb_escape,
+            front_app,
+            type_text,
             orb_set_visible,
             orb_get_visible,
         ])
@@ -1093,7 +1174,7 @@ pub fn run() {
                     &MenuItem::with_id(app, "inbox", "Inbox", true, None::<&str>)?,
                     &MenuItem::with_id(app, "open", "Open Captain", true, None::<&str>)?,
                     &MenuItem::with_id(app, "setup", "Get started…", true, None::<&str>)?,
-                    &MenuItem::with_id(app, "orb-show", "Show the talk button", true, None::<&str>)?,
+                    &MenuItem::with_id(app, "orb-show", "Show the little Captain", true, None::<&str>)?,
                     &MenuItem::with_id(app, "restart-server", "Restart Captain on this Mac", true, None::<&str>)?,
                     &PredefinedMenuItem::separator(app)?,
                     &MenuItem::with_id(app, "quit", "Quit Captain", true, None::<&str>)?,

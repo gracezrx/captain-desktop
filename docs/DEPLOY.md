@@ -141,7 +141,13 @@ The app carries the server and runs it with the Mac's Node.js (22 or newer), on 
 
 - **Shortcuts:** ⌃⇧C opens the panel to write. ⌃⇧Space talks to Captain: hold it while you talk, or tap it, talk, and tap again to send. Change either one in Settings → This Mac or the setup guide. If another app already uses the keys (Lock In uses ⌘⇧Space), or they're made only of ⌥ (macOS 15 refuses those), Settings says the shortcut isn't working.
 - **Setup guide:** opens after your first sign-in, and any time from the menu bar icon → **Get started…**, Home, or Settings → This Mac. Each step has a quick test: Captain says back what it heard, sends a test banner, and shows a test snapshot.
-- **The talk button:** a small face that floats above other windows. Hold it to talk, tap it for hands-free, drag it anywhere. Right-click it to switch between English and Chinese, turn spoken answers off, or hide it. The menu bar menu brings it back.
+- **The little Captain:** a small mascot that floats above other windows (from the "Captain Lite — floating Captain" design).
+  - **Hold** it, or hold ⌃⇧Space, and talk. The talk card shows where it's going: name a chat ("…for the launch room") or agents ("have Writer…") and it picks them; otherwise it goes to Captain. Let go to send; Esc cancels.
+  - **Type into <app>** on the talk card types what you said where your cursor is, in the app you were using ("new line" and "scratch that" work). macOS asks for Accessibility the first time.
+  - After you send, a card shows the plan's steps as they go, then the answer, read aloud.
+  - **Click** it for the card at the top right: what needs you (approve right there, or reply by voice) and what's being worked on. **Double-click** to talk hands-free.
+  - **Drag** it anywhere; it settles on the nearest edge. **Right-click** for English or 中文, spoken answers on or off, or hide. The menu bar menu brings it back.
+  - A gold count shows how many things need you.
 - **How voice works:** the app carries a small helper, `captain-voice` (`src-tauri/voice/main.swift`). It uses Apple's speech recognition, on the Mac itself when the language allows, and Apple's voices to read answers aloud. macOS asks once for Microphone and Speech Recognition. Download better voices in System Settings → Accessibility → Spoken Content → System voice → Manage Voices.
 - Building the app yourself needs Xcode's command-line tools for the helper (`npm run build:voice`, run automatically by `tauri build`).
 - To use a hosted server instead, choose **A Captain server** on the sign-in screen.

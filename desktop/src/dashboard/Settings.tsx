@@ -662,7 +662,7 @@ function ThisMacSettings() {
                 )}
             </section>
             <section>
-                <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Talk button</h3>
+                <h3 className='mb-1 text-[13px] font-extrabold text-ink'>The little Captain</h3>
                 <label className='flex items-center gap-3 text-[13px] text-text'>
                     <input
                         type='checkbox'
@@ -674,9 +674,9 @@ function ThisMacSettings() {
                             void setTalkButtonVisible(e.target.checked);
                         }}
                     />
-                    Show the floating talk button on the screen
+                    Show the little Captain on the screen
                 </label>
-                <p className='mt-1 pl-7 text-[12px] text-muted'>Drag it anywhere. Right-click it to switch language or turn off spoken answers.</p>
+                <p className='mt-1 pl-7 text-[12px] text-muted'>Hold it to talk (it picks the chat from what you say), click it for what needs you, double-click to talk hands-free. Drag it anywhere; it settles on the nearest edge. Right-click for language and spoken answers.</p>
             </section>
             {server?.configured && (
                 <section>
