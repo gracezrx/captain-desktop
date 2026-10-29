@@ -3,8 +3,7 @@ import {useState} from 'react';
 
 import {api, errorMessage} from '../lib/api';
 import {timeOfDay} from '../lib/format';
-import {sendMessage} from '../lib/send';
-import {agentForUser, canDecide, decisionOf, displayName, useStore} from '../lib/store';
+import {canDecide, decisionOf, displayName, useStore} from '../lib/store';
 import type {Post} from '../lib/types';
 
 // "The agent prepares, a person confirms." The decided card comes back to
@@ -15,8 +14,6 @@ export function DecisionCard({post, compact = false}: {post: Post; compact?: boo
     const me = useStore((s) => s.me);
     const workspace = useStore((s) => s.workspace);
     const updatePost = useStore((s) => s.updatePost);
-    const agents = useStore((s) => s.agents);
-    const channel = useStore((s) => s.channels[post.channelId]);
     const [busy, setBusy] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [changing, setChanging] = useState(false);
@@ -25,8 +22,8 @@ export function DecisionCard({post, compact = false}: {post: Post; compact?: boo
         return null;
     }
 
-    // "Change it": say what to change. The draft is turned down and the agent
-    // is asked, in the thread, to redo it that way (and ask again).
+    // "Change it": say what to change. The draft is turned down with that
+    // note, and the same agent revises it and asks again.
     const changeIt = async () => {
         const what = change.trim();
         if (!what) {
@@ -35,15 +32,7 @@ export function DecisionCard({post, compact = false}: {post: Post; compact?: boo
         setBusy('change');
         setError(null);
         try {
-            updatePost(await api.postAction(post.id, 'reject'));
-            const agent = agentForUser(agents, post.userId);
-            const direct = channel?.type === 'D';
-            await sendMessage({
-                channelId: post.channelId,
-                rootId: direct ? post.rootId : post.rootId ?? post.id,
-                text: `${agent && !direct ? `@${agent.handle} ` : ''}Change "${decision.title}": ${what}`,
-                attachments: [],
-            });
+            updatePost(await api.postAction(post.id, 'reject', {note: what}));
             setChanging(false);
             setChange('');
         } catch (e) {
@@ -74,10 +63,10 @@ export function DecisionCard({post, compact = false}: {post: Post; compact?: boo
                     {approved ? <Check size={12} strokeWidth={3}/> : expired ? <Clock size={12} strokeWidth={2.5}/> : <X size={12} strokeWidth={3}/>}
                 </span>
                 <span className='min-w-0 truncate'>
-                    <span className='font-semibold text-ink'>{approved ? 'Approved' : expired ? 'Expired' : 'Rejected'}</span>
+                    <span className='font-semibold text-ink'>{approved ? 'Approved' : expired ? 'Expired' : decision.note ? 'Sent back' : 'Rejected'}</span>
                     {decision.decidedBy && <>{' by '}{displayName(users[decision.decidedBy])}</>}
                     {decision.decidedAt ? ` · ${timeOfDay(decision.decidedAt)}` : ''}
-                    <span className='text-muted'>{' — '}{decision.title}</span>
+                    <span className='text-muted'>{' — '}{decision.note ? `"${decision.note}"` : decision.title}</span>
                 </span>
             </div>
         );

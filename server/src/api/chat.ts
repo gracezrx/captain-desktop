@@ -82,7 +82,7 @@ export function chatRoutes(app: FastifyInstance, api: Api): void {
         await posts.react(ctx, req.user, id(req), decodeURIComponent((req.params as P).emoji), false);
         return {ok: true};
     });
-    app.post('/posts/:id/actions/:action', async (req) => posts.action(ctx, req.user, id(req), (req.params as P).action));
+    app.post('/posts/:id/actions/:action', async (req) => posts.action(ctx, req.user, id(req), (req.params as P).action, req.body));
 
     // ---------------------------------------------------------- files
     app.post('/channels/:id/files', {config: {cost: 5}}, async (req) => {

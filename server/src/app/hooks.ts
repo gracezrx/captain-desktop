@@ -11,7 +11,7 @@ import {log} from '../util/log.js';
 
 export type Draft = {message: string; props: Record<string, unknown>; channel: ChannelRow; author: UserRow; rootId: string | null};
 export type SavedPost = {post: PostRow; channel: ChannelRow; author: UserRow; mentions: string[]};
-export type PostAction = {post: PostRow; action: string; user: UserRow};
+export type PostAction = {post: PostRow; action: string; user: UserRow; note?: string | null};
 
 type Before = (draft: Draft) => Promise<Draft | {reject: string}>;
 type After = (saved: SavedPost) => Promise<void>;

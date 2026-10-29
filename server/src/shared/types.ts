@@ -91,6 +91,7 @@ export type DecisionCard = {
     status: 'pending' | 'approved' | 'rejected' | 'expired';
     decidedBy: ID | null;
     decidedAt: Ms | null;
+    note?: string | null; // "Change it": what the person asked to change
 };
 
 export type PostType = '' | 'system' | 'plan' | 'decision' | 'agent_step';
@@ -233,6 +234,9 @@ export type Run = {
     workspaceId: ID;
     channelId: ID;
     rootPostId: ID | null;
+    triggerPostId: ID | null; // the message that started it
+    cardPostId: ID | null; // a plan's card (in a direct message, its steps go in the card's thread)
+    resultPostId: ID | null; // the answer, once there is one
     status: RunStatus;
     kind: 'single' | 'plan';
     goal: string;

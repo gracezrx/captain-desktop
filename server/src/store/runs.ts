@@ -51,6 +51,9 @@ export function toRun(r: RunRow, steps: StepRow[]): Run {
         workspaceId: r.workspaceId,
         channelId: r.channelId,
         rootPostId: r.rootPostId,
+        triggerPostId: r.triggerPostId,
+        cardPostId: r.cardPostId,
+        resultPostId: r.resultPostId,
         status: r.status,
         kind: r.kind,
         goal: r.goal,
@@ -174,12 +177,13 @@ export type ApprovalRow = {
     requestedBy: string | null;
     decidedBy: string | null;
     decidedAt: number | null;
+    note: string | null; // the change asked for, when turned down with "Change it"
     executedAt: number | null;
     result: string | null;
     createdAt: number;
 };
 
-export async function createApproval(db: Db, a: Omit<ApprovalRow, 'id' | 'status' | 'decidedBy' | 'decidedAt' | 'createdAt' | 'postId' | 'executedAt' | 'result'>): Promise<ApprovalRow> {
+export async function createApproval(db: Db, a: Omit<ApprovalRow, 'id' | 'status' | 'decidedBy' | 'decidedAt' | 'createdAt' | 'postId' | 'executedAt' | 'result' | 'note'>): Promise<ApprovalRow> {
     const [row] = await db`
         insert into approvals (id, workspace_id, channel_id, run_id, step_id, agent_id, tool, args, tool_call_id, title, reason, fields, status, requested_by, created_at)
         values (${newId()}, ${a.workspaceId}, ${a.channelId}, ${a.runId}, ${a.stepId}, ${a.agentId}, ${a.tool}, ${db.json(a.args as never)}, ${a.toolCallId},
@@ -198,9 +202,9 @@ export async function setApprovalPost(db: Db, id: string, postId: string): Promi
 }
 
 // Decide once: returns null when someone else already decided.
-export async function decideApproval(db: Db, id: string, status: 'approved' | 'rejected', userId: string): Promise<ApprovalRow | null> {
+export async function decideApproval(db: Db, id: string, status: 'approved' | 'rejected', userId: string, note: string | null = null): Promise<ApprovalRow | null> {
     const [row] = await db`
-        update approvals set status = ${status}, decided_by = ${userId}, decided_at = ${now()}
+        update approvals set status = ${status}, decided_by = ${userId}, decided_at = ${now()}, note = ${note}
         where id = ${id} and status = 'pending'
         returning *`;
     return (row as unknown as ApprovalRow) ?? null;

@@ -23,8 +23,8 @@ import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from
 import {portraitSrc} from '../components/Avatar';
 import {getVoiceLang, setVoiceLang, type VoiceLang} from '../lib/dictation';
 import {
-    ACCESSIBILITY_SETTINGS, type FrontApp, frontApp, isTauri, onVoice, openExternal, orbEscape, prettyKeys, showPanel,
-    shortcutsGet, speak, speakStop, typeInto, voiceCancel, voiceStart, voiceStop,
+    ACCESSIBILITY_SETTINGS, type FrontApp, frontApp, isTauri, openExternal, orbEscape, prettyKeys, showPanel,
+    shortcutsGet, speak, speakStop, typeInto, type VoiceEvent, voiceCancel, voiceStart, voiceStop,
 } from '../lib/native';
 import {type DirectoryAgent, type OrbDirectory, type Route, routeFor} from '../lib/route';
 import {dictated, languageOf, spoken} from '../lib/spoken';
@@ -39,7 +39,8 @@ type Task = {id: string; where: string; lead: string; team: string[]; steps: Tal
 type Answer = {by: string; agentId: string | null; text: string; where: string; channelId: string; rootId: string | null; postId: string};
 type Notice = {text: string; tone: 'info' | 'error'; action?: {label: string; run: () => void}};
 
-const OWNER = 'orb';
+const BASE_W = 100; // the window at its smallest: just the Captain (logical px, see tauri.conf.json)
+const BASE_H = 108;
 const HOLD_MS = 220; // longer than this is a hold, shorter a click
 const DOUBLE_MS = 280; // a second click within this is a double-click
 const SENT_CARD_MS = 6000; // how long "Sent to …" stays before folding into the Captain
@@ -59,6 +60,28 @@ function writePref(key: string, value: string): void {
     } catch {
         // not remembered
     }
+}
+
+// A Tauri event, for as long as the component is mounted (the latest handler,
+// listening once).
+function useTauriEvent<T>(name: string, handler: (payload: T) => void): void {
+    const ref = useRef(handler);
+    ref.current = handler;
+    useEffect(() => {
+        let un: (() => void) | undefined;
+        let gone = false;
+        void listen<T>(name, (e) => ref.current(e.payload)).then((u) => {
+            if (gone) {
+                u();
+            } else {
+                un = u;
+            }
+        });
+        return () => {
+            gone = true;
+            un?.();
+        };
+    }, [name]);
 }
 
 function joinNames(names: string[]): string {
@@ -119,14 +142,10 @@ export function Orb() {
 
     // ---------------------------------------------------------------- the workspace, via the dashboard window
 
+    useTauriEvent<OrbState>('orb-state', setOrb);
     useEffect(() => {
-        let un: (() => void) | undefined;
-        void listen<OrbState>('orb-state', (e) => setOrb(e.payload)).then((u) => {
-            un = u;
-        });
         void emitTo('main', 'orb-hello', {}).catch(() => undefined);
         void shortcutsGet().then((s) => s && setKeys({talk: prettyKeys(s.talk.keys), panel: prettyKeys(s.panel.keys)})).catch(() => undefined);
-        return () => un?.();
     }, []);
 
     // A clock for "Sent" folding away.
@@ -139,9 +158,25 @@ export function Orb() {
     }, [task]);
 
     // ---------------------------------------------------------------- listening
+    //
+    // Each listen gets its own id, so a late event from an earlier one (or a
+    // cancelled one) never touches this one. Letting go before the microphone
+    // has started still sends.
 
-    const startListening = useCallback(async (started: How) => {
-        await speakStop();
+    const session = useRef('');
+    const starting = useRef(false);
+    const micOn = useRef(false); // the helper is listening for this session
+    const stopWanted = useRef(false); // let go (or Esc) before it started
+
+    const startListening = useCallback(async (started: How): Promise<boolean> => {
+        if (phaseRef.current === 'listening' || starting.current) {
+            return false;
+        }
+        starting.current = true;
+        const owner = `orb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        session.current = owner;
+        micOn.current = false;
+        stopWanted.current = false;
         cancelled.current = false;
         howRef.current = started;
         setHow(started);
@@ -160,20 +195,49 @@ export function Orb() {
             }
         });
         try {
-            await voiceStart(getVoiceLang(), OWNER);
+            await speakStop();
+            try {
+                await voiceStart(getVoiceLang(), owner);
+            } catch (e) {
+                // A listen left running (say, by a crash): stop it and try once more.
+                if (!/already listening/i.test(String(e))) {
+                    throw e;
+                }
+                await voiceCancel();
+                await voiceStart(getVoiceLang(), owner);
+            }
+            micOn.current = true;
+            if (cancelled.current) {
+                void voiceCancel();
+            } else if (stopWanted.current) {
+                void voiceStop();
+            }
+            return true;
         } catch (e) {
+            await voiceCancel();
             setPhase('idle');
             showNotice({text: typeof e === 'string' ? e : 'Voice isn\'t available.', tone: 'error'}, 6000);
+            return false;
+        } finally {
+            starting.current = false;
         }
     }, [showNotice]);
 
     const finishListening = useCallback(() => {
-        void voiceStop();
+        if (micOn.current) {
+            void voiceStop();
+        } else {
+            stopWanted.current = true;
+        }
     }, []);
 
     const cancelListening = useCallback(() => {
         cancelled.current = true;
-        void voiceCancel();
+        session.current = '';
+        if (micOn.current) {
+            void voiceCancel();
+        }
+        micOn.current = false;
         setPhase('idle');
     }, []);
 
@@ -183,11 +247,18 @@ export function Orb() {
         const where = route.reply && route.channel ? route.channel.name : route.channel ? `# ${route.channel.name}` : route.dmWith?.name ?? 'Captain';
         setTask({id, where, lead: route.dmWith?.name ?? (route.agents.length === 1 ? route.agents[0].name : 'Captain'), team: route.agents.length > 1 ? route.agents.map((a) => a.handle) : [], steps: [], channelId: null, rootId: null, sentAt: Date.now()});
         setPhase('working');
-        await emitTo('main', 'talk-ask', {id, text, target: targetFor(route)});
-    }, []);
+        try {
+            await emitTo('main', 'talk-ask', {id, text, target: targetFor(route)});
+        } catch {
+            setTask(null);
+            setPhase('idle');
+            showNotice({text: 'Open Captain first: the dashboard sends what you say.', tone: 'error'}, 6000);
+        }
+    }, [showNotice]);
 
     const typeIt = useCallback(async (text: string) => {
-        const app = frontRef.current;
+        // The app you're in now (you may have clicked into another one since you started).
+        const app = (await frontApp()) ?? frontRef.current;
         if (!app) {
             await sendToChat(text);
             return;
@@ -210,8 +281,11 @@ export function Orb() {
         }
     }, [sendToChat, showNotice]);
 
-    // What the microphone hears.
-    useEffect(() => onVoice(OWNER, (e) => {
+    // What the microphone hears (this session only).
+    useTauriEvent<VoiceEvent>('voice', (e) => {
+        if (!session.current || e.owner !== session.current) {
+            return;
+        }
         if (e.type === 'level') {
             setLevel(e.value);
             setLevels((l) => [...l.slice(-23), e.value]);
@@ -219,28 +293,29 @@ export function Orb() {
             heardRef.current = e.text.trim();
             setHeard(e.text);
         } else if (e.type === 'error') {
+            session.current = '';
+            micOn.current = false;
             setPhase('idle');
             showNotice({text: e.message, tone: 'error'}, 8000);
         } else if (e.type === 'end') {
+            session.current = '';
+            micOn.current = false;
             setLevel(0);
-            if (phaseRef.current !== 'listening') {
-                return;
-            }
-            if (cancelled.current) {
-                setPhase('idle');
+            if (phaseRef.current !== 'listening' || cancelled.current) {
+                setPhase((p) => (p === 'listening' ? 'idle' : p));
                 return;
             }
             const text = heardRef.current;
             if (!text) {
                 setPhase('idle');
                 showNotice({text: 'I didn\'t catch that.', tone: 'info'}, 2500);
-            } else if (modeRef.current === 'type') {
+            } else if (modeRef.current === 'type' && !pickRef.current?.reply) {
                 void typeIt(text);
             } else {
                 void sendToChat(text);
             }
         }
-    }), [sendToChat, showNotice, typeIt]);
+    });
 
     // ---------------------------------------------------------------- what came back
 
@@ -252,191 +327,231 @@ export function Orb() {
         }
     }, []);
 
-    useEffect(() => {
-        let un: (() => void) | undefined;
-        void listen<TalkReply>('talk-reply', (e) => {
-            const r = e.payload;
-            const t = taskRef.current;
-            if (!t || r.id !== t.id) {
+    // Requests waiting on your decision: their answer still comes, later.
+    const followUps = useRef(new Set<string>());
+
+    const landAnswer = useCallback((r: Extract<TalkReply, {type: 'answer'}>, where: string) => {
+        setAnswer({by: r.by, agentId: r.agentId, text: r.text, where, channelId: r.channelId, rootId: r.rootId, postId: r.postId});
+        window.clearTimeout(timers.current.answer);
+        timers.current.answer = window.setTimeout(() => setAnswer(null), ANSWER_CARD_MS + Math.min(40_000, r.text.length * 60));
+        if (phaseRef.current === 'listening') {
+            return; // you're talking: it waits on the card
+        }
+        setPhase('done');
+        window.clearTimeout(timers.current.done);
+        timers.current.done = window.setTimeout(() => {
+            if (phaseRef.current !== 'done') {
                 return;
             }
-            if (r.type === 'replied') {
-                setTask(null);
-                setPhase('done');
-                showNotice({text: `Replied in ${r.where}`, tone: 'info'}, 2500);
-                window.clearTimeout(timers.current.done);
-                timers.current.done = window.setTimeout(() => setPhase((p) => (p === 'done' ? 'idle' : p)), 1400);
-            } else if (r.type === 'sent') {
-                setTask({...t, where: r.where, lead: r.lead, team: r.team, channelId: r.channelId, rootId: r.rootId});
-            } else if (r.type === 'progress') {
-                setTask({...t, steps: r.steps});
-            } else if (r.type === 'answer') {
-                setTask(null);
-                setAnswer({by: r.by, agentId: r.agentId, text: r.text, where: t.where, channelId: r.channelId, rootId: r.rootId, postId: r.postId});
-                window.clearTimeout(timers.current.answer);
-                timers.current.answer = window.setTimeout(() => setAnswer(null), ANSWER_CARD_MS + Math.min(40_000, r.text.length * 60));
-                setPhase('done');
-                window.clearTimeout(timers.current.done);
-                timers.current.done = window.setTimeout(() => {
-                    if (phaseRef.current !== 'done') {
-                        return;
-                    }
-                    if (mutedRef.current || !r.text) {
-                        setPhase('idle');
-                    } else {
-                        void sayAnswer(r.text);
-                    }
-                }, 1300);
-            } else if (r.type === 'decision') {
-                setTask(null);
+            if (mutedRef.current || !r.text) {
                 setPhase('idle');
-                showNotice({text: `Needs your OK: ${r.text}`, tone: 'info', action: {label: 'Decide', run: () => void showPanel({mode: 'thread', channelId: r.channelId, postId: r.postId})}});
-            } else if (r.type === 'error') {
-                setTask(null);
-                setPhase('idle');
-                showNotice({text: r.text, tone: 'error', action: r.channelId ? {label: 'Open', run: () => void showPanel({mode: 'thread', channelId: r.channelId!})} : undefined}, 9000);
+            } else {
+                void sayAnswer(r.text);
             }
-        }).then((u) => {
-            un = u;
-        });
-        return () => un?.();
-    }, [sayAnswer, showNotice]);
+        }, 1300);
+    }, [sayAnswer]);
+
+    useTauriEvent<TalkReply>('talk-reply', (r) => {
+        const t = taskRef.current;
+        const mine = Boolean(t && r.id === t.id);
+        const later = followUps.current.has(r.id);
+        if (!mine && !later) {
+            return;
+        }
+        const update = (patch: Partial<Task>) => setTask((cur) => (cur && cur.id === r.id ? {...cur, ...patch} : cur));
+        if (r.type === 'sent') {
+            update({where: r.where, lead: r.lead, team: r.team, channelId: r.channelId, rootId: r.rootId});
+        } else if (r.type === 'progress') {
+            update({steps: r.steps});
+        } else if (r.type === 'replied') {
+            setTask(null);
+            setPhase('done');
+            showNotice({text: `Replied in ${r.where}`, tone: 'info'}, 2500);
+            window.clearTimeout(timers.current.done);
+            timers.current.done = window.setTimeout(() => setPhase((p) => (p === 'done' ? 'idle' : p)), 1400);
+        } else if (r.type === 'answer') {
+            followUps.current.delete(r.id);
+            if (mine) {
+                setTask(null);
+            }
+            landAnswer(r, t && mine ? t.where : r.channelId);
+        } else if (r.type === 'decision') {
+            if (mine) {
+                setTask(null);
+                setPhase((p) => (p === 'working' ? 'idle' : p));
+            }
+            followUps.current.add(r.id);
+            showNotice({text: `Needs your OK: ${r.text}`, tone: 'info', action: {label: 'Decide', run: () => void showPanel({mode: 'thread', channelId: r.channelId, postId: r.postId})}});
+        } else if (r.type === 'error') {
+            followUps.current.delete(r.id);
+            if (mine) {
+                setTask(null);
+                setPhase((p) => (p === 'working' ? 'idle' : p));
+            }
+            showNotice({text: r.text, tone: 'error', action: r.channelId ? {label: 'Open', run: () => void showPanel({mode: 'thread', channelId: r.channelId!})} : undefined}, 9000);
+        }
+    });
+
+    // Nothing back from the dashboard at all: say so rather than spin.
+    useEffect(() => {
+        if (!task || task.channelId) {
+            return undefined;
+        }
+        const t = window.setTimeout(() => {
+            if (taskRef.current?.id === task.id && !taskRef.current.channelId) {
+                setTask(null);
+                setPhase((p) => (p === 'working' ? 'idle' : p));
+                showNotice({text: 'Captain didn\'t pick that up. Is the dashboard signed in? Open Captain and try again.', tone: 'error'}, 9000);
+            }
+        }, 25_000);
+        return () => window.clearTimeout(t);
+    }, [task, showNotice]);
 
     // "Reply by voice" on the card at the top right.
-    useEffect(() => {
-        let un: (() => void) | undefined;
-        void listen<ReplyByVoice>('orb-reply', (e) => {
-            const r = e.payload;
-            setModeState('chat');
-            void startListening('handsfree').then(() => setPick({channel: {id: r.channelId, name: r.where}, agents: [], dmWith: null, reply: {rootId: r.rootId}}));
-        }).then((u) => {
-            un = u;
-        });
-        return () => un?.();
-    }, [startListening]);
+    useTauriEvent<ReplyByVoice>('orb-reply', (r) => {
+        const target: Route = {channel: {id: r.channelId, name: r.where}, agents: [], dmWith: null, reply: {rootId: r.rootId}};
+        setModeState('chat');
+        if (phaseRef.current === 'listening') {
+            setPick(target);
+            return;
+        }
+        void startListening('handsfree').then((ok) => ok && setPick(target));
+    });
 
     // The microphone on the card at the top right: talk hands-free.
-    useEffect(() => {
-        let un: (() => void) | undefined;
-        void listen('orb-talk', () => void startListening('handsfree')).then((u) => {
-            un = u;
-        });
-        return () => un?.();
-    }, [startListening]);
+    useTauriEvent('orb-talk', () => {
+        if (phaseRef.current !== 'listening') {
+            void startListening('handsfree');
+        }
+    });
 
     // ---------------------------------------------------------------- keys
 
     // The talk shortcut: hold to talk, or tap to start and tap again to send.
     const keyDownAt = useRef(0);
-    useEffect(() => {
-        let un: (() => void) | undefined;
-        void listen<boolean>('talk-key', (e) => {
-            if (e.payload) {
-                keyDownAt.current = Date.now();
-                if (phaseRef.current === 'listening') {
-                    finishListening();
-                    keyDownAt.current = 0;
-                } else {
-                    void startListening('key');
-                }
-            } else if (keyDownAt.current) {
-                const held = Date.now() - keyDownAt.current > 350;
+    useTauriEvent<boolean>('talk-key', (pressed) => {
+        if (pressed) {
+            keyDownAt.current = Date.now();
+            if (phaseRef.current === 'listening') {
+                finishListening();
                 keyDownAt.current = 0;
-                if (held) {
-                    finishListening();
-                } else {
-                    howRef.current = 'handsfree';
-                    setHow('handsfree');
-                }
+            } else {
+                void startListening('key');
             }
-        }).then((u) => {
-            un = u;
-        });
-        return () => un?.();
-    }, [finishListening, startListening]);
+        } else if (keyDownAt.current) {
+            const held = Date.now() - keyDownAt.current > 350;
+            keyDownAt.current = 0;
+            if (held) {
+                finishListening();
+            } else {
+                howRef.current = 'handsfree';
+                setHow('handsfree');
+            }
+        }
+    });
 
     // Esc cancels listening or stops speaking, in any app (while it matters).
     useEffect(() => {
-        const active = phase === 'listening' || phase === 'speaking';
-        void orbEscape(active);
+        void orbEscape(phase === 'listening' || phase === 'speaking');
     }, [phase]);
+    useEffect(() => () => void orbEscape(false), []);
+    const onEscape = () => {
+        if (phaseRef.current === 'listening') {
+            cancelListening();
+        } else if (phaseRef.current === 'speaking') {
+            void speakStop();
+            setPhase('idle');
+        }
+    };
+    useTauriEvent('orb-escape', onEscape);
     useEffect(() => {
-        const onEscape = () => {
-            if (phaseRef.current === 'listening') {
-                cancelListening();
-            } else if (phaseRef.current === 'speaking') {
-                void speakStop();
-                setPhase('idle');
-            }
-        };
         const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onEscape();
         window.addEventListener('keydown', onKey);
-        let un: (() => void) | undefined;
-        void listen('orb-escape', onEscape).then((u) => {
-            un = u;
-        });
-        return () => {
-            window.removeEventListener('keydown', onKey);
-            un?.();
-        };
-    }, [cancelListening]);
+        return () => window.removeEventListener('keydown', onKey);
+    });
 
     // Right-click options.
-    useEffect(() => {
-        let un: (() => void) | undefined;
-        void listen<string>('orb-menu', (e) => {
-            if (e.payload === 'orb-mute') {
-                setMuted((m) => {
-                    writePref('captain.orb.muted', m ? '0' : '1');
-                    return !m;
-                });
-            } else if (e.payload === 'orb-lang') {
-                setLang((l) => {
-                    const next: VoiceLang = l === 'zh-CN' ? 'en-US' : 'zh-CN';
-                    setVoiceLang(next);
-                    showNotice({text: next === 'zh-CN' ? '我会听中文' : 'Listening in English', tone: 'info'}, 2000);
-                    return next;
-                });
-            }
-        }).then((u) => {
-            un = u;
-        });
-        return () => un?.();
-    }, [showNotice]);
+    useTauriEvent<string>('orb-menu', (id) => {
+        if (id === 'orb-mute') {
+            setMuted((m) => {
+                writePref('captain.orb.muted', m ? '0' : '1');
+                return !m;
+            });
+        } else if (id === 'orb-lang') {
+            setLang((l) => {
+                const next: VoiceLang = l === 'zh-CN' ? 'en-US' : 'zh-CN';
+                setVoiceLang(next);
+                showNotice({text: next === 'zh-CN' ? '我会听中文' : 'Listening in English', tone: 'info'}, 2000);
+                return next;
+            });
+        }
+    });
 
     // ---------------------------------------------------------------- the window
+    //
+    // The window grows and shrinks with the cards, around a fixed corner: the
+    // bottom right (or bottom left, on the left edge) stays where the Captain
+    // is. One resize at a time; the latest size wins.
 
     const selfMoveUntil = useRef(0);
     const wrap = useRef<HTMLDivElement>(null);
+    const anchor = useRef<{x: number; bottom: number} | null>(null); // physical px: the corner's x, and the bottom
+    const sideRef = useRef(side);
+    sideRef.current = side;
+    const fitting = useRef(false);
+    const fitAgain = useRef(false);
 
-    // Fit the window to what's showing, keeping the Captain where it is.
+    const readAnchor = useCallback(async () => {
+        const win = getCurrentWindow();
+        const [pos, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
+        anchor.current = {x: sideRef.current === 'right' ? pos.x + size.width : pos.x, bottom: pos.y + size.height};
+    }, []);
+
+    const fit = useCallback(async () => {
+        const el = wrap.current;
+        if (!el || !isTauri) {
+            return;
+        }
+        if (fitting.current) {
+            fitAgain.current = true;
+            return;
+        }
+        fitting.current = true;
+        try {
+            do {
+                fitAgain.current = false;
+                if (!anchor.current) {
+                    await readAnchor();
+                }
+                const win = getCurrentWindow();
+                const scale = await win.scaleFactor();
+                const r = el.getBoundingClientRect();
+                const w = Math.ceil(r.width * scale);
+                const h = Math.ceil(r.height * scale);
+                const a = anchor.current!;
+                const x = sideRef.current === 'right' ? a.x - w : a.x;
+                selfMoveUntil.current = Date.now() + 800;
+                await win.setSize(new PhysicalSize(w, h));
+                await win.setPosition(new PhysicalPosition(x, a.bottom - h));
+            } while (fitAgain.current);
+        } finally {
+            fitting.current = false;
+        }
+    }, [readAnchor]);
+
     useLayoutEffect(() => {
         const el = wrap.current;
         if (!el || !isTauri) {
             return undefined;
         }
-        const fit = async () => {
-            const r = el.getBoundingClientRect();
-            const win = getCurrentWindow();
-            const [scale, pos, size] = await Promise.all([win.scaleFactor(), win.outerPosition(), win.outerSize()]);
-            const w = Math.ceil(r.width * scale);
-            const h = Math.ceil(r.height * scale);
-            if (w === size.width && h === size.height) {
-                return;
-            }
-            const x = side === 'right' ? pos.x + size.width - w : pos.x;
-            const y = pos.y + size.height - h;
-            selfMoveUntil.current = Date.now() + 800;
-            await win.setSize(new PhysicalSize(w, h));
-            await win.setPosition(new PhysicalPosition(x, y));
-        };
         const ro = new ResizeObserver(() => void fit());
         ro.observe(el);
         void fit();
         return () => ro.disconnect();
-    }, [side]);
+    }, [fit, side]);
 
-    // After a drag: settle on the nearest side edge, on screen, and remember it.
+    // After a drag: settle on the nearest side edge, on screen, and remember
+    // where the Captain sits.
     const settle = useCallback(async () => {
         if (!isTauri) {
             return;
@@ -458,8 +573,14 @@ export function Orb() {
             selfMoveUntil.current = Date.now() + 800;
             await win.setPosition(new PhysicalPosition(x, y));
         }
-        setSide(toLeft ? 'left' : 'right');
-        void invoke('orb_moved').catch(() => undefined);
+        sideRef.current = toLeft ? 'left' : 'right';
+        setSide(sideRef.current);
+        anchor.current = {x: toLeft ? x : x + size.width, bottom: y + size.height};
+        // Saved as where the window sits at its smallest (what it opens at).
+        const scale = mon.scaleFactor;
+        const baseW = Math.round(BASE_W * scale);
+        const baseH = Math.round(BASE_H * scale);
+        void invoke('orb_moved', {x: toLeft ? x : x + size.width - baseW, y: y + size.height - baseH}).catch(() => undefined);
     }, []);
 
     useEffect(() => {
@@ -469,6 +590,7 @@ export function Orb() {
         void settle();
         let timer: number | undefined;
         let un: (() => void) | undefined;
+        let gone = false;
         void getCurrentWindow().onMoved(() => {
             if (Date.now() < selfMoveUntil.current) {
                 return;
@@ -476,9 +598,14 @@ export function Orb() {
             window.clearTimeout(timer);
             timer = window.setTimeout(() => void settle(), 450);
         }).then((u) => {
-            un = u;
+            if (gone) {
+                u();
+            } else {
+                un = u;
+            }
         });
         return () => {
+            gone = true;
             window.clearTimeout(timer);
             un?.();
         };
@@ -676,7 +803,7 @@ export function Orb() {
                         {menu && mode === 'chat' && (
                             <div role='listbox' aria-label='Send to' style={{display: 'flex', flexWrap: 'wrap', gap: 6, padding: 8, borderRadius: 14, background: 'rgba(20, 39, 105, 0.04)'}}>
                                 <button type='button' className='fc-chip' onPointerDown={(e) => e.stopPropagation()} onClick={() => {
-                                    setPick({channel: null, agents: live.agents, dmWith: live.agents.length === 1 ? live.agents[0] : captain ?? null});
+                                    setPick({channel: null, agents: live.agents, dmWith: captain ?? null});
                                     setMenu(false);
                                 }}>
                                     <img src={portraitSrc(captain?.portrait, 'captain')} alt=''/>Captain

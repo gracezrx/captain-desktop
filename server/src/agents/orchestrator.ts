@@ -426,11 +426,12 @@ export class Orchestrator {
         }
         // The decision, the card and the job that resumes the work commit together.
         const {decided, row} = await tx(this.ctx.sql, async (t) => {
-            const d = await decideApproval(t, approval.id, a.action === 'approve' ? 'approved' : 'rejected', a.user.id);
+            const note = a.action === 'reject' ? a.note ?? null : null;
+            const d = await decideApproval(t, approval.id, a.action === 'approve' ? 'approved' : 'rejected', a.user.id, note);
             if (!d) {
                 throw conflict(approval.status === 'expired' ? 'This request expired.' : 'Someone already decided this.', 'already_decided');
             }
-            const r = await mergePostProps(t, a.post.id, {decision: {...card, status: d.status, decidedBy: a.user.id, decidedAt: d.decidedAt}});
+            const r = await mergePostProps(t, a.post.id, {decision: {...card, status: d.status, decidedBy: a.user.id, decidedAt: d.decidedAt, note: d.note}});
             if (approval.runId) {
                 await this.ctx.jobs.enqueue(t, 'approval.resume', {approvalId: approval.id}, {dedupeKey: `resume:${approval.id}`});
             }

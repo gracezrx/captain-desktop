@@ -157,6 +157,25 @@ describe('agents and orchestration (demo model)', () => {
         assert.match(thread.at(-1)!.message, /won't do that/);
     });
 
+    it('"Change it" turns the draft down with the change, and the agent asks again with a revised one', async () => {
+        const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@writer email the beta testers that the app is ready'});
+        const run = await runFor(owner.api, generalId, p.id);
+        assert.equal(run.status, 'waiting_approval');
+        const card = (await owner.api.get(`/posts/${p.id}/thread`) as Post[]).find((x) => x.type === 'decision')!;
+        const decided: Post = await owner.api.post(`/posts/${card.id}/actions/reject`, {note: 'make it warmer'});
+        assert.equal(decided.props.decision.status, 'rejected');
+        assert.equal(decided.props.decision.note, 'make it warmer');
+        const again = await waitFor(async () => {
+            const thread: Post[] = await owner.api.get(`/posts/${p.id}/thread`);
+            return thread.find((x) => x.type === 'decision' && x.id !== card.id && x.props.decision.status === 'pending');
+        }, 15_000, 'a revised draft');
+        assert.match(again.props.decision.title, /revised/);
+        const runs: Run[] = await owner.api.get(`/channels/${generalId}/runs`);
+        assert.equal(runs.filter((r) => r.rootPostId === p.id).length, 1, 'the same run, not a second one');
+        assert.equal(((await owner.api.get(`/runs/${run.id}`)) as Run).status, 'waiting_approval');
+        await owner.api.post(`/posts/${again.id}/actions/reject`);
+    });
+
     it('cancelling a waiting run expires its approval', async () => {
         const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@writer publish the announcement to our customers'});
         const run = await runFor(owner.api, generalId, p.id);

@@ -215,7 +215,7 @@ export const api = {
     deletePost: (id: string) => del(`/posts/${id}`),
     react: (id: string, emoji: string) => post(`/posts/${id}/reactions`, {emoji}),
     unreact: (id: string, emoji: string) => del(`/posts/${id}/reactions/${encodeURIComponent(emoji)}`),
-    postAction: (id: string, action: string) => post<Post>(`/posts/${id}/actions/${action}`),
+    postAction: (id: string, action: string, body: {note?: string} = {}) => post<Post>(`/posts/${id}/actions/${action}`, body),
     search: (wsId: string, q: string) => get<Post[]>(`/workspaces/${wsId}/search?q=${encodeURIComponent(q)}`),
     upload: (channelId: string, file: Blob, name: string) => {
         const form = new FormData();

@@ -16,11 +16,11 @@
 //   captain-voice frontapp        The app in front of Captain (where voice
 //                                 typing goes): {"type":"app","name":"Notes","pid":123},
 //                                 or {"type":"none"}.
-//   captain-voice paste <pid>     Reads text on stdin and pastes it where the
-//                                 cursor is in that app, then puts the clipboard
-//                                 back. Needs Accessibility permission (macOS
-//                                 asks the first time); prints {"type":"done"}
-//                                 or {"type":"error","message":"…"}.
+//   captain-voice paste <pid>     Reads text on stdin and types it where the
+//                                 cursor is in that app (as keyboard input; the
+//                                 clipboard isn't touched). Needs Accessibility
+//                                 permission (macOS asks the first time); prints
+//                                 {"type":"done"} or {"type":"error","message":"…"}.
 
 import AppKit
 import ApplicationServices
@@ -150,8 +150,13 @@ final class Listener {
             }
         }
         emit(["type": "ready"])
-        // Nobody talks for more than two minutes at a time.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { self.stop() }
+        // Nobody talks for more than two minutes at a time: past that, it was
+        // left on by mistake, so nothing is sent.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) {
+            if !self.finished {
+                fail("Stopped listening after two minutes, and nothing was sent.")
+            }
+        }
     }
 
     func reportLevel(_ buffer: AVAudioPCMBuffer) {
@@ -246,6 +251,9 @@ func frontApp() -> Never {
 }
 
 func paste(into pid: pid_t) -> Never {
+    guard pid > 0 else {
+        fail("There's no app to type into.")
+    }
     let input = FileHandle.standardInput.readDataToEndOfFile()
     let text = String(data: input, encoding: .utf8) ?? ""
     if text.isEmpty {
@@ -256,41 +264,56 @@ func paste(into pid: pid_t) -> Never {
     guard AXIsProcessTrustedWithOptions(prompt) else {
         fail("Captain needs Accessibility permission to type into other apps. Turn on Captain in System Settings → Privacy & Security → Accessibility, then try again.")
     }
-    // Bring that app back to the front (clicking Captain may have taken it).
+    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else {
+        fail("That app has closed.")
+    }
+    // Bring it back to the front (clicking Captain may have taken it), and make
+    // sure it is, so the words don't land somewhere else.
     if NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
         let element = AXUIElementCreateApplication(pid)
         AXUIElementSetAttributeValue(element, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
-        NSRunningApplication(processIdentifier: pid)?.activate(options: [])
-        usleep(200_000)
-    }
-    let pasteboard = NSPasteboard.general
-    let saved: [[(NSPasteboard.PasteboardType, Data)]] = (pasteboard.pasteboardItems ?? []).map { item in
-        item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
-    }
-    pasteboard.clearContents()
-    pasteboard.setString(text, forType: .string)
-    usleep(60_000)
-    // ⌘V
-    let source = CGEventSource(stateID: .combinedSessionState)
-    let keyV: CGKeyCode = 9
-    let down = CGEvent(keyboardEventSource: source, virtualKey: keyV, keyDown: true)
-    down?.flags = .maskCommand
-    let up = CGEvent(keyboardEventSource: source, virtualKey: keyV, keyDown: false)
-    up?.flags = .maskCommand
-    down?.post(tap: .cghidEventTap)
-    up?.post(tap: .cghidEventTap)
-    // Put back what was on the clipboard once the app has pasted.
-    usleep(450_000)
-    pasteboard.clearContents()
-    let items: [NSPasteboardItem] = saved.map { pairs in
-        let item = NSPasteboardItem()
-        for (type, data) in pairs {
-            item.setData(data, forType: type)
+        app.activate(options: [])
+        var waited = 0
+        while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid && waited < 20 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            waited += 1
         }
-        return item
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            fail("Couldn't bring \(app.localizedName ?? "that app") to the front. Click into it and try again.")
+        }
+        usleep(120_000)
     }
-    if !items.isEmpty {
-        pasteboard.writeObjects(items)
+    // Type it: up to 20 characters per key event; a new line is ⇧⏎ (a line
+    // break, not "send", in chat apps).
+    let source = CGEventSource(stateID: .hidSystemState)
+    let lines = text.components(separatedBy: "\n")
+    for (index, line) in lines.enumerated() {
+        let units = Array(line.utf16)
+        var at = 0
+        while at < units.count {
+            var chunk = Array(units[at..<min(at + 20, units.count)])
+            // Don't split a surrogate pair across two events.
+            if chunk.count == 20, let last = chunk.last, UTF16.isLeadSurrogate(last) {
+                chunk.removeLast()
+            }
+            at += chunk.count
+            for keyDown in [true, false] {
+                let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown)
+                event?.flags = []
+                event?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                event?.post(tap: .cghidEventTap)
+            }
+            usleep(8_000)
+        }
+        if index < lines.count - 1 {
+            let returnKey: CGKeyCode = 36
+            for keyDown in [true, false] {
+                let event = CGEvent(keyboardEventSource: source, virtualKey: returnKey, keyDown: keyDown)
+                event?.flags = .maskShift
+                event?.post(tap: .cghidEventTap)
+            }
+            usleep(8_000)
+        }
     }
     emit(["type": "done"])
     exit(0)

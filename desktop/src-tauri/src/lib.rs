@@ -958,8 +958,16 @@ struct FrontAppInfo {
     pid: i32,
 }
 
+// Only the floating Captain's own window can type into other apps.
+fn from_orb(window: &WebviewWindow) -> bool {
+    window.label() == "orb"
+}
+
 #[tauri::command]
-async fn front_app() -> Option<FrontAppInfo> {
+async fn front_app(window: WebviewWindow) -> Option<FrontAppInfo> {
+    if !from_orb(&window) {
+        return None;
+    }
     let out = Command::new(voice_helper().ok()?).arg("frontapp").stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     let value: serde_json::Value = serde_json::from_str(text.lines().last()?.trim()).ok()?;
@@ -970,7 +978,13 @@ async fn front_app() -> Option<FrontAppInfo> {
 }
 
 #[tauri::command]
-async fn type_text(pid: i32, text: String) -> Result<(), String> {
+async fn type_text(window: WebviewWindow, pid: i32, text: String) -> Result<(), String> {
+    if !from_orb(&window) {
+        return Err("Only the floating Captain can type into other apps.".into());
+    }
+    if pid <= 0 {
+        return Err("There's no app to type into.".into());
+    }
     let mut child = Command::new(voice_helper()?)
         .args(["paste", &pid.to_string()])
         .stdin(Stdio::piped())
@@ -1056,11 +1070,16 @@ fn orb_menu(app: AppHandle, window: WebviewWindow, muted: bool, lang: String) ->
     window.popup_menu(&menu).map_err(|e| e.to_string())
 }
 
-/// Remember where the button was left (called after it's dragged).
+/// Remember where the Captain was left (after it's dragged). The window grows
+/// with its cards, so the page says where it sits at its smallest.
 #[tauri::command]
-fn orb_moved(app: AppHandle, window: WebviewWindow) {
-    if let Ok(p) = window.outer_position() {
-        app.state::<Mutex<Settings>>().lock().unwrap().orb_position = Some((p.x, p.y));
+fn orb_moved(app: AppHandle, window: WebviewWindow, x: Option<i32>, y: Option<i32>) {
+    let position = match (x, y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        _ => window.outer_position().ok().map(|p| (p.x, p.y)),
+    };
+    if let Some(p) = position {
+        app.state::<Mutex<Settings>>().lock().unwrap().orb_position = Some(p);
         save_settings(&app);
     }
 }
@@ -1158,6 +1177,13 @@ pub fn run() {
 
             // The floating talk button.
             if let Some(window) = orb(&handle) {
+                // Never leave Esc taken if the button's page goes away.
+                let app_for_orb = handle.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::Destroyed = event {
+                        orb_escape(app_for_orb.clone(), false);
+                    }
+                });
                 place_orb(&handle, &window);
                 let _ = window.set_visible_on_all_workspaces(true);
                 if settings.orb_visible {

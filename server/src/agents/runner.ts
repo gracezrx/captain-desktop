@@ -272,6 +272,8 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
                 } else {
                     content = (await getApproval(ctx.sql, a.id))?.result ?? 'This approved action was already started earlier; its result is unknown. Don\'t repeat it. Tell the person to check before trying again.';
                 }
+            } else if (a.note) {
+                content = `The person didn't approve this as it was and asked for a change: "${a.note}". It was not done. Make that change and ask for approval again with the revised version.`;
             } else {
                 content = 'The person rejected this action, so it was not done. Don\'t try it again; say what you would do instead or ask what they want changed.';
             }

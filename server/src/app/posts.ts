@@ -190,7 +190,10 @@ export async function search(ctx: Ctx, user: UserRow, workspaceId: string, q: st
 }
 
 // A button on a message (Approve / Reject on decision cards).
-export async function action(ctx: Ctx, user: UserRow, postId: string, actionId: string): Promise<Post> {
+export async function action(ctx: Ctx, user: UserRow, postId: string, actionId: string, body: unknown = {}): Promise<Post> {
+    // "Change it": turn the draft down with what should change.
+    const raw = (body as {note?: unknown} | null)?.note;
+    const note = typeof raw === 'string' && raw.trim() ? raw.trim().slice(0, 500) : null;
     const post = await getPost(ctx.sql, postId);
     if (!post || post.deletedAt) {
         throw notFound('Message');
@@ -204,7 +207,7 @@ export async function action(ctx: Ctx, user: UserRow, postId: string, actionId: 
     if (!handler) {
         throw badRequest('This message has no actions.');
     }
-    await handler(ctx.sql, {post, action: actionId, user});
+    await handler(ctx.sql, {post, action: actionId, user, note});
     return toPost(ctx.sql, (await getPost(ctx.sql, postId))!);
 }
 

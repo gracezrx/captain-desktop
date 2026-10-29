@@ -120,6 +120,11 @@ export async function demoCompletion(opts: CallOptions): Promise<CallResult> {
         toolCalls.push(tools.has('send_email') ?
             call('send_email', {to: 'team@example.com', subject: 'Update from Captain', body: `Hi team,\n\n${ask}\n\nBest,\nCaptain`}) :
             call('request_approval', {title: `Send: ${ask.slice(0, 60)}`, reason: 'This goes outside the workspace.', action: ask.slice(0, 200)}));
+    } else if (last?.role === 'tool' && /asked for a change: "/.test(textOf(last)) && tools.has('send_email')) {
+        // "Change it": redo the draft that way and ask again.
+        const change = textOf(last).match(/asked for a change: "([^"]*)"/)?.[1] ?? '';
+        text = `Changed it (${change}). Here it is again for your OK.`;
+        toolCalls.push(call('send_email', {to: 'team@example.com', subject: 'Update from Captain (revised)', body: `Hi team,\n\n${ask}\n\n(${change})\n\nBest,\nCaptain`}));
     } else if (last?.role === 'user' && /\b(document|doc|write-?up|one-?pager|report)\b/i.test(ask) && tools.has('create_document') && !/ROLE: SYNTHESIS/.test(system)) {
         text = 'Drafting the document.';
         toolCalls.push(call('create_document', {title: ask.slice(0, 60) || 'Draft', markdown: `# ${ask.slice(0, 60)}\n\n## Summary\n\nA first draft prepared in demo mode.\n\n## Next steps\n\n- Review\n- Approve\n`}));

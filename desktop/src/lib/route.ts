@@ -29,7 +29,10 @@ function words(s: string): string {
     return s.toLowerCase().replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// How strongly the text names this channel: 0 = not at all.
+// How strongly the text names this channel: 0 = not at all. Only a clear
+// cue counts, so a private request doesn't land in a shared channel because
+// a word matched: "#design", "the design channel", a name that is itself a
+// room ("the launch room"), or "post / share / send … in <name>".
 function channelScore(text: string, name: string): number {
     const n = words(name);
     if (!n) {
@@ -38,15 +41,15 @@ function channelScore(text: string, name: string): number {
     const t = words(text);
     const body = n.split(' ').map(esc).join('\\s+');
     if (new RegExp(`#\\s*${body}\\b`).test(t)) {
+        return 4 + n.length;
+    }
+    if (new RegExp(`\\b${body}\\s+(?:channel|room|chat|thread)\\b`).test(t)) {
         return 3 + n.length;
     }
-    if (new RegExp(`\\b${body}\\s+(?:channel|room|chat|thread)\\b`).test(t) || (/\b(?:room|channel|chat)$/.test(n) && new RegExp(`\\b${body}\\b`).test(t))) {
+    if (n.includes(' ') && /\b(?:room|channel|chat)$/.test(n) && new RegExp(`\\b${body}\\b`).test(t)) {
         return 2 + n.length;
     }
-    if (!EVERYDAY.has(n) && n.split(' ').length > 1 && new RegExp(`\\b(?:in|to|into|on|for|with)\\s+(?:the\\s+|our\\s+)?${body}\\b`).test(t)) {
-        return 1 + n.length;
-    }
-    if (!EVERYDAY.has(n) && n.length >= 5 && new RegExp(`\\b(?:in|to|into|on)\\s+(?:the\\s+|our\\s+)?${body}\\b`).test(t)) {
+    if (!EVERYDAY.has(n) && new RegExp(`\\b(?:post|share|send|drop|put|announce)\\b[^.?!]{0,40}?\\b(?:in|to|into|with)\\s+(?:the\\s+|our\\s+)?${body}\\b`).test(t)) {
         return 1 + n.length;
     }
     return 0;

@@ -23,7 +23,7 @@ export function languageOf(text: string): VoiceLang {
 // sentence before it), in English; 换行 for a new line in Chinese.
 export function dictated(raw: string): string {
     let text = raw;
-    const scratch = /\s*\b(?:scratch that|delete that)\b[.,!?]?\s*/i;
+    const scratch = /\s*\bscratch that\b[.,!?]?\s*/i;
     while (scratch.test(text)) {
         const m = text.match(scratch)!;
         const before = text.slice(0, m.index).replace(/\s+$/, '');
