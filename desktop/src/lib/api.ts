@@ -35,7 +35,11 @@ export function normalizeServer(url: string): string {
     if (!trimmed) {
         return DEFAULT_SERVER;
     }
-    return /^https?:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+    if (/^https?:\/\//.test(trimmed)) {
+        return trimmed;
+    }
+    // A server on this computer has no certificate: plain http.
+    return /^(localhost|127\.0\.0\.1)(:|\/|$)/.test(trimmed) ? `http://${trimmed}` : `https://${trimmed}`;
 }
 
 export function getServerUrl(): string {
