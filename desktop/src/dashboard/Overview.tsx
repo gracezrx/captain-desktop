@@ -128,7 +128,8 @@ export function Overview({onInvite, onModels}: {onInvite: () => void; onModels: 
     };
     const openRun = (r: ActivityRun) => {
         setActive(r.channelId);
-        const root = r.rootPostId ?? (channels[r.channelId]?.type === 'D' ? null : r.triggerPostId);
+        // Answered in a thread, or right in the conversation (a direct message, or a private chat with agents).
+        const root = r.rootPostId;
         if (root) {
             useStore.getState().openThread(root);
         }

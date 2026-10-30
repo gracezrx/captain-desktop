@@ -98,4 +98,39 @@ describe('Captain joins in', () => {
         const dm = await owner.api.post(`/workspaces/${wsId}/dms`, {userId: captain.userId});
         await assert.rejects(owner.api.patch(`/channels/${dm.id}`, {captainJoinsIn: false}));
     });
+
+    it('in a private chat that\'s just you and agents, they answer without an @, in the conversation', async () => {
+        const agents: {userId: string; handle: string; isCoordinator: boolean}[] = (await owner.api.get(`/workspaces/${wsId}/agents`)).agents;
+        const writer = agents.find((a) => a.handle === 'writer')!;
+        const analyst = agents.find((a) => a.handle === 'analyst')!;
+
+        // One agent: it answers itself.
+        const solo = await owner.api.post(`/workspaces/${wsId}/channels`, {displayName: 'Drafts', type: 'P'});
+        await owner.api.post(`/channels/${solo.id}/members`, {userIds: [writer.userId]});
+        const p: Post = await owner.api.post(`/channels/${solo.id}/posts`, {message: 'draft a two-line launch teaser'});
+        const [run] = await waitFor(async () => {
+            const runs = await runsFor(solo.id, p.id);
+            return runs.length ? runs : null;
+        }, 15_000, 'Writer answering');
+        assert.equal(run.rootPostId, null, 'answered in the conversation, not a thread');
+        const reply = await waitFor(async () => ((await owner.api.get(`/channels/${solo.id}/posts`)) as Post[]).find((x) => x.userId === writer.userId && !x.props.streaming), 15_000, 'the reply');
+        assert.equal((reply as Post & {rootId: string | null}).rootId ?? null, null);
+
+        // Several agents: Captain takes it, working with just them.
+        const pair = await owner.api.post(`/workspaces/${wsId}/channels`, {displayName: 'Numbers', type: 'P'});
+        await owner.api.post(`/channels/${pair.id}/members`, {userIds: [writer.userId, analyst.userId]});
+        const q: Post = await owner.api.post(`/channels/${pair.id}/posts`, {message: 'what should our launch target be'});
+        const captain = agents.find((a) => a.isCoordinator)!;
+        const led = await waitFor(async () => ((await owner.api.get(`/channels/${pair.id}/posts`)) as (Post & {rootId: string | null})[]).find((x) => x.userId === captain.userId && !x.props.streaming), 15_000, 'Captain taking it');
+        assert.equal(led.rootId, null);
+        assert.equal((await runsFor(pair.id, q.id)).length, 1, 'one run, led by Captain');
+
+        // With another person in the chat, it's @ again (and Captain joining in).
+        const invite = await owner.api.post(`/workspaces/${wsId}/invites`, {});
+        const mia = await signup(s.base, {name: 'Mia', invite: invite.token});
+        await owner.api.post(`/channels/${solo.id}/members`, {userIds: [(await mia.api.get('/users/me')).id]});
+        const r: Post = await owner.api.post(`/channels/${solo.id}/posts`, {message: 'Mia, lunch at noon tomorrow'});
+        await settle();
+        assert.equal((await runsFor(solo.id, r.id)).length, 0);
+    });
 });

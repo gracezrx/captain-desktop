@@ -9,6 +9,9 @@
 //   and sent several full conversations to the models at once.
 // - a reply in a thread an agent was working in, with no mention: that agent
 //   continues (Captain, with the same team, for a coordinated thread)
+// - a private chat where everyone else is an agent (just you and your agents):
+//   they answer without an @, in the conversation; several are coordinated by
+//   Captain. (Public group chats keep @, plus Captain joining in.)
 // @captain on its own answers directly or plans the work across the team.
 // - anything else a person writes in a group chat, with no @mentions: Captain
 //   may join in on its own when it can help (joinin.ts decides, as a job)
@@ -28,7 +31,7 @@ import {considerJoining, worthConsidering} from './joinin.js';
 
 const MAX_AGENTS_PER_MESSAGE = 6;
 
-type Chosen = {agents: AgentRow[]; team: string[] | null};
+type Chosen = {agents: AgentRow[]; team: string[] | null; inline?: boolean}; // inline: answer in the conversation, not a thread
 
 export function mentionedHandles(message: string): string[] {
     return [...new Set([...message.matchAll(/(?:^|[^\w@.])@([a-z0-9][a-z0-9._-]{0,40})/gi)].map((m) => m[1].toLowerCase().replace(/[._-]+$/, '')))];
@@ -80,6 +83,25 @@ async function agentsToRun(ctx: Ctx, saved: SavedPost): Promise<Chosen> {
             return agent?.enabled ? {agents: [agent], team: (last.team as string[] | null) ?? null} : none;
         }
     }
+    // A private chat that's just you and agents: they answer without an @, in
+    // the conversation, as in a direct message. One agent answers itself; with
+    // several, Captain works out who does what (just those agents).
+    const others = channel.type === 'P' || channel.type === 'G' ? (await listChannelMemberIds(ctx.sql, channel.id)).filter((id) => id !== post.userId) : [];
+    const memberAgents = others.length ? await getAgentsByUserIds(ctx.sql, others) : [];
+    if (others.length && memberAgents.length === others.length) {
+        const live = memberAgents.filter((a) => a.enabled);
+        const specialists = live.filter((a) => !a.isCoordinator).slice(0, MAX_AGENTS_PER_MESSAGE);
+        if (live.length === 1) {
+            return {agents: live, team: null, inline: true};
+        }
+        const captain = live.find((a) => a.isCoordinator) ?? (await listAgents(ctx.sql, channel.workspaceId)).find((a) => a.isCoordinator && a.enabled);
+        if (captain && specialists.length) {
+            return {agents: [captain, ...specialists], team: specialists.map((a) => a.id), inline: true};
+        }
+        if (live.length) {
+            return {agents: live.slice(0, 1), team: null, inline: true};
+        }
+    }
     return none;
 }
 
@@ -90,7 +112,7 @@ export function registerTriggers(ctx: Ctx): void {
         if (author.isBot || post.type !== '' || channel.deletedAt) {
             return;
         }
-        const {agents, team} = await agentsToRun(ctx, saved);
+        const {agents, team, inline} = await agentsToRun(ctx, saved);
         if (!agents.length) {
             // Nobody was asked. In a group chat, Captain may still join in.
             if (channel.type !== 'D' && channel.captainJoinsIn && !ctx.router.demoMode && !mentionedHandles(post.message).length && worthConsidering(post.message)) {
@@ -98,8 +120,9 @@ export function registerTriggers(ctx: Ctx): void {
             }
             return;
         }
-        // In a DM, answer in the conversation; elsewhere, in the message's thread.
-        const replyRoot = channel.type === 'D' && !post.rootId ? null : post.rootId ?? post.id;
+        // In a DM (or a chat that's just you and agents), answer in the
+        // conversation; elsewhere, in the message's thread.
+        const replyRoot = (channel.type === 'D' || inline) && !post.rootId ? null : post.rootId ?? post.id;
         const members = new Set(await listChannelMemberIds(ctx.sql, channel.id));
         // A coordinated team works in one run, led by Captain (agents[0]);
         // otherwise each agent (one, or a DM's) has its own.
