@@ -37,16 +37,20 @@ export function Panel() {
         }
     }), []);
 
-    // Fit the window to the content.
+    // Fit the window to the content. The box is new on every open (to replay
+    // the entrance), so watch the new one; and measure its layout height, not
+    // its on-screen size, which the entrance animation scales down.
     useEffect(() => {
         const el = box.current;
         if (!el) {
             return undefined;
         }
-        const ro = new ResizeObserver(() => void setPanelHeight(el.getBoundingClientRect().height + 2));
+        const fit = () => void setPanelHeight(el.offsetHeight + 2);
+        const ro = new ResizeObserver(fit);
         ro.observe(el);
+        fit();
         return () => ro.disconnect();
-    }, [phase]);
+    }, [phase, opened]);
 
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
