@@ -131,6 +131,29 @@ function normalize(raw: string): string | null {
     }
 }
 
+// Could this address carry information out of the workspace? A plain page
+// (https://site/path/to/page) can't say much; a ?query, a login, or a
+// long or encoded path part can (…/collect?d=<secret>, …/<base64 blob>).
+// Plain pages open without asking; these ask a person first.
+export function carriesData(href: string): boolean {
+    let u: URL;
+    try {
+        u = new URL(href);
+    } catch {
+        return true;
+    }
+    if (u.search || u.username || u.password) {
+        return true;
+    }
+    const path = decodeURIComponent(u.pathname.replace(/%(?![0-9a-f]{2})/gi, '%25'));
+    if (path.length > 160) {
+        return true;
+    }
+    // A token mixing letters and digits (a key, an id, base64) rather than words.
+    const token = (seg: string) => (seg.match(/[A-Za-z0-9+]{24,}/g) ?? []).some((run) => /\d/.test(run) && /[A-Za-z]/.test(run));
+    return (u.pathname.match(/%[0-9a-f]{2}/gi)?.length ?? 0) > 6 || path.split('/').some((seg) => seg.length > 60 || /[@=]/.test(seg) || token(seg));
+}
+
 export function htmlToText(html: string): {title: string; text: string} {
     const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() ?? '';
     const text = html.
@@ -144,17 +167,17 @@ export function htmlToText(html: string): {title: string; text: string} {
 
 export const readUrl: Tool = {
     name: 'read_url',
-    description: 'Read a public web page and get its text. Links people shared and web_search results open right away; any other address asks a person first.',
+    description: 'Read a public web page and get its text. Plain addresses (no ?query) open right away, as do links people shared and web_search results; an address with a ?query or other data in it asks a person first, so prefer the plain address of a page.',
     parameters: {type: 'object', properties: {url: {type: 'string', description: 'The full http(s) address'}}, required: ['url']},
     external: false,
     available: () => true,
     needsApproval: (tc, args) => {
         const href = normalize(str(args.url, 2000));
-        return !href || !tc.trustedLinks().has(href);
+        return !href || (carriesData(href) && !tc.trustedLinks().has(href));
     },
     describe: (args) => ({
         title: `Open a web page: ${str(args.url, 120)}`,
-        reason: 'Nobody shared this link, so the agent asks first: a web address can carry information out of the workspace.',
+        reason: 'This address has a ?query or other data in it, and nobody shared it, so the agent asks first: data in an address can carry information out of the workspace. Plain page addresses open without asking.',
         fields: [{label: 'Address', value: str(args.url, 2000)}],
     }),
     async run(tc, args) {

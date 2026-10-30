@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import {after, before, describe, it} from 'node:test';
 
-import {blockedAddress, checkUrl, linksIn} from '../src/agents/tools/web.js';
+import {blockedAddress, carriesData, checkUrl, linksIn} from '../src/agents/tools/web.js';
 import {Catalog} from '../src/llm/catalog.js';
 
 import {client, expectStatus, fakeProvider, type FakeRequest, lastUserText, model, signup, socket, startServer, type TestServer, waitFor} from './helpers.js';
@@ -97,6 +97,15 @@ describe('security', () => {
         const thread: Post[] = await owner.api.get(`/posts/${post.id}/thread`);
         assert.ok(!thread.some((p) => p.type === 'decision'));
         assert.match(thread.at(-1)!.message, /private network/);
+    });
+
+    it('plain page addresses open without asking; addresses with data in them ask', () => {
+        for (const url of ['https://www.google.com/forms/about/', 'https://en.wikipedia.org/wiki/Slack_(software)', 'https://example.com/blog/how-to-plan-a-great-product-launch-in-four-weeks', 'https://www.producthunt.com/categories/ai-agents']) {
+            assert.equal(carriesData(url), false, url);
+        }
+        for (const url of ['https://evil.example/collect?d=secret', 'https://evil.example/c/c2FsYXJ5IGJhbmRzOiBzZWNyZXRhbHBoYQ', 'https://evil.example/u:p@x', 'https://user:pw@example.com/', `https://evil.example/${'a'.repeat(61)}`, 'https://evil.example/k=v', 'https://evil.example/%73%61%6c%61%72%79%20%62%61%6e%64%73']) {
+            assert.equal(carriesData(url), true, url);
+        }
     });
 
     it('finds shared links with their own parentheses, without the ones around them', () => {
