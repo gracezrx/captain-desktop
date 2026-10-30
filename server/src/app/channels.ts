@@ -72,18 +72,24 @@ export async function create(ctx: Ctx, user: UserRow, workspaceId: string, input
     return dto;
 }
 
-export async function update(ctx: Ctx, user: UserRow, channelId: string, input: {displayName?: string; purpose?: string}): Promise<Channel> {
+export async function update(ctx: Ctx, user: UserRow, channelId: string, input: {displayName?: string; purpose?: string; captainJoinsIn?: boolean}): Promise<Channel> {
     const {channel, member} = await requireChannelMember(ctx.sql, channelId, user.id);
     const role = await requireWorkspaceRole(ctx.sql, channel.workspaceId, user.id, 'member');
-    if (channel.type === 'D' || channel.type === 'G') {
+    const renaming = input.displayName !== undefined || input.purpose !== undefined;
+    if (channel.type === 'D' && input.captainJoinsIn !== undefined) {
+        throw badRequest('Captain always answers in a direct message with it.');
+    }
+    if (renaming && (channel.type === 'D' || channel.type === 'G')) {
         throw badRequest('Direct messages can\'t be renamed.');
     }
-    if (member.role !== 'admin' && !atLeast(role, 'admin') && channel.type === 'P') {
+    // Anyone in the chat can say whether Captain joins in; renaming a private one needs an admin.
+    if (renaming && member.role !== 'admin' && !atLeast(role, 'admin') && channel.type === 'P') {
         throw forbidden();
     }
     const updated = await updateChannel(ctx.sql, channelId, {
         displayName: input.displayName !== undefined ? z.string().trim().min(1).max(64).parse(input.displayName) : undefined,
         purpose: input.purpose !== undefined ? z.string().trim().max(250).parse(input.purpose) : undefined,
+        captainJoinsIn: input.captainJoinsIn,
     });
     const dto = toChannel(updated);
     await publishToChannel(ctx, ctx.sql, channelId, {event: 'channel_updated', data: {channel: dto}});
@@ -97,7 +103,7 @@ export async function archive(ctx: Ctx, user: UserRow, channelId: string): Promi
     }
     await requireWorkspaceRole(ctx.sql, channel.workspaceId, user.id, 'admin');
     if (channel.name === 'general') {
-        throw badRequest('#general can\'t be archived.');
+        throw badRequest('General can\'t be archived.');
     }
     await archiveChannel(ctx.sql, channelId);
     audit(ctx.sql, {workspaceId: channel.workspaceId, userId: user.id, action: 'channel_archived', target: channelId});

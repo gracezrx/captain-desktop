@@ -207,7 +207,7 @@ async function ask({id, text, target}: TalkAsk, reply: (r: TalkReply) => Promise
         await sendMessage({channelId, rootId, text, attachments: []});
         const channel = useStore.getState().channels[channelId];
         const name = channelTitle(channel, s.me?.id, s.users);
-        await reply({id, type: 'replied', channelId, rootId, where: channel?.type === 'D' ? name : `# ${name}`});
+        await reply({id, type: 'replied', channelId, rootId, where: name});
         return;
     }
     const agents = Object.values(s.agents).filter((a) => a.enabled);
@@ -223,7 +223,7 @@ async function ask({id, text, target}: TalkAsk, reply: (r: TalkReply) => Promise
     let lead: string;
     if (route.channel) {
         channelId = route.channel.id;
-        where = `# ${route.channel.name}`;
+        where = route.channel.name;
         lead = named.length === 1 ? named[0].name : 'Captain';
     } else {
         const withAgent = (target?.dmAgentId ? s.agents[target.dmAgentId] : null) ?? captain;

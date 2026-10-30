@@ -95,7 +95,7 @@ export function ChatPicker({value, onChange}: Props) {
                                 >
                                     <ChatIcon channel={c.channel} size={24}/>
                                     <span className='min-w-0 flex-1 truncate font-semibold text-ink'>{c.title}</span>
-                                    <span className='text-[11px] text-muted'>{c.kind === 'agent' ? 'Agent' : c.kind === 'dm' ? 'Direct' : 'Channel'}</span>
+                                    <span className='text-[11px] text-muted'>{c.kind === 'agent' ? 'Agent' : c.kind === 'dm' ? 'Direct' : 'Group chat'}</span>
                                     {c.channel.id === value && <Check size={14} className='text-accent'/>}
                                 </button>
                             </li>

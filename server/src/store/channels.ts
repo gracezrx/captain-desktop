@@ -15,6 +15,7 @@ export type ChannelRow = {
     deletedAt: number | null;
     lastPostAt: number;
     totalMsgCount: number;
+    captainJoinsIn: boolean;
 };
 
 export type ChannelMemberRow = ChannelMember & {joinedAt: number};
@@ -31,6 +32,7 @@ export function toChannel(r: ChannelRow, memberIds?: string[]): Channel {
         createdAt: r.createdAt,
         lastPostAt: r.lastPostAt,
         totalMsgCount: r.totalMsgCount,
+        captainJoinsIn: r.captainJoinsIn ?? true,
         ...(memberIds ? {memberIds} : {}),
     };
 }
@@ -58,11 +60,12 @@ export async function getChannelByName(db: Db, workspaceId: string, name: string
     return (row as unknown as ChannelRow) ?? null;
 }
 
-export async function updateChannel(db: Db, id: string, patch: {displayName?: string; purpose?: string}): Promise<ChannelRow> {
+export async function updateChannel(db: Db, id: string, patch: {displayName?: string; purpose?: string; captainJoinsIn?: boolean}): Promise<ChannelRow> {
     const [row] = await db`
         update channels set
             display_name = coalesce(${patch.displayName ?? null}, display_name),
             purpose = coalesce(${patch.purpose ?? null}, purpose),
+            captain_joins_in = coalesce(${patch.captainJoinsIn ?? null}, captain_joins_in),
             updated_at = ${now()}
         where id = ${id}
         returning *`;

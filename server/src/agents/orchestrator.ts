@@ -84,7 +84,7 @@ export class Orchestrator {
 
     private async setting(run: RunRow, requester: UserRow): Promise<Setting> {
         const [ws, channel] = await Promise.all([getWorkspace(this.ctx.sql, run.workspaceId), getChannel(this.ctx.sql, run.channelId)]);
-        return {workspaceName: ws?.name ?? 'Captain', channel: channel!, requesterName: requester.displayName};
+        return {workspaceName: ws?.name ?? 'Captain', channel: channel!, requesterName: requester.displayName, unprompted: run.unprompted};
     }
 
     // Where step work is posted: the request's thread, or for a plan started at
@@ -359,7 +359,7 @@ export class Orchestrator {
             outcome = await runAgent({
                 ctx: this.ctx, run, stepId: step.id, agent: sc.agent, agentUser: sc.agentUser, requester: sc.requester, channel: sc.setting.channel,
                 threadRoot: this.workRoot(run), purpose: plan ? 'step' : 'reply', tier: opts.tier, needVision: opts.needVision,
-                postType: plan ? 'agent_step' : '', postProps: plan ? {step: {runId: run.id, stepId: step.id, title: step.title}} : {},
+                postType: plan ? 'agent_step' : '', postProps: plan ? {step: {runId: run.id, stepId: step.id, title: step.title}} : run.unprompted ? {joinedIn: true} : {},
                 state, useTools: true, signal: ctrl.signal, resume: opts.resume,
                 onPost: async (postId) => {
                     await updateStep(this.ctx.sql, run.id, step.id, {postId});
@@ -513,7 +513,7 @@ export class Orchestrator {
             const out = await runAgent({
                 ctx: this.ctx, run, stepId: 'synthesis', agent: captain, agentUser: captainUser, requester, channel: setting.channel,
                 threadRoot: run.rootPostId, purpose: 'synthesis', tier: await chooseTier(this.ctx, run.workspaceId, captain, run.goal, 'synthesis'), needVision: false,
-                postType: '', postProps: {result: {runId}},
+                postType: '', postProps: {result: {runId}, ...(run.unprompted ? {joinedIn: true} : {})},
                 state: {messages: [{role: 'system', content: synthesisSystem(captain, setting, run.goal, results)}, {role: 'user', content: `${requester.displayName}: ${trigger?.message ?? run.goal}`}], pending: [], fileIds: []},
                 useTools: false, signal: ctrl.signal,
             });

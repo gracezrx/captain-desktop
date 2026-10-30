@@ -61,7 +61,7 @@ const ACTIVITY: Record<string, (args: Record<string, unknown>) => string> = {
     web_search: (a) => `Searching the web for "${String(a.query ?? '').slice(0, 60)}"`,
     read_url: (a) => `Reading ${String(a.url ?? 'a page').slice(0, 80)}`,
     search_workspace: (a) => `Searching messages for "${String(a.query ?? '').slice(0, 60)}"`,
-    read_channel: (a) => `Reading #${String(a.channel ?? '').replace(/^#/, '')}`,
+    read_channel: (a) => `Reading ${String(a.channel ?? 'the chat').replace(/^#/, '')}`,
     create_document: (a) => `Writing "${String(a.title ?? 'a document').slice(0, 60)}"`,
     ask_agent: (a) => `Asking @${String(a.agent ?? 'a teammate').replace(/^@/, '')}`,
 };

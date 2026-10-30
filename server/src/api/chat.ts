@@ -29,7 +29,7 @@ export function chatRoutes(app: FastifyInstance, api: Api): void {
 
     app.get('/channels/:id', async (req) => channels.getOne(ctx, req.user, id(req)));
     app.patch('/channels/:id', async (req) => {
-        const body = z.object({displayName: z.string().trim().min(1).max(64).optional(), purpose: z.string().trim().max(250).optional()}).parse(req.body);
+        const body = z.object({displayName: z.string().trim().min(1).max(64).optional(), purpose: z.string().trim().max(250).optional(), captainJoinsIn: z.boolean().optional()}).parse(req.body);
         return channels.update(ctx, req.user, id(req), body);
     });
     app.delete('/channels/:id', async (req) => {

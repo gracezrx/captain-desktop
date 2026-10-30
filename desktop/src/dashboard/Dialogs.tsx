@@ -1,6 +1,6 @@
 // Small dialogs: new channel, browse channels, new direct message, search.
 
-import {Hash, Lock, Search} from 'lucide-react';
+import {Lock, Search, Users} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 
 import {Avatar} from '../components/Avatar';
@@ -36,14 +36,14 @@ export function NewChannel({onClose}: {onClose: () => void}) {
         }
     };
     return (
-        <Modal title='New channel' onClose={onClose}>
+        <Modal title='New group chat' onClose={onClose}>
             <form onSubmit={submit} className='space-y-3'>
                 <FieldLabel text='Name'><input className={input} value={name} onChange={(e) => setName(e.target.value)} placeholder='e.g. Launch room' autoFocus/></FieldLabel>
                 <FieldLabel text='What it is for' hint='Agents read this too.'><input className={input} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder='Optional'/></FieldLabel>
                 <div className='grid grid-cols-2 gap-2'>
                     {[false, true].map((p) => (
                         <button key={String(p)} type='button' onClick={() => setPriv(p)} className={`flex items-start gap-2 rounded-2xl p-3 text-left ring-1 ${priv === p ? 'bg-tint ring-accent/50' : 'ring-line hover:bg-bg-subtle'}`}>
-                            {p ? <Lock size={16} className='mt-0.5 text-accent-text'/> : <Hash size={16} className='mt-0.5 text-accent-text'/>}
+                            {p ? <Lock size={16} className='mt-0.5 text-accent-text'/> : <Users size={16} className='mt-0.5 text-accent-text'/>}
                             <span>
                                 <span className='block text-[13px] font-bold text-ink'>{p ? 'Private' : 'Public'}</span>
                                 <span className='block text-[11.5px] text-muted'>{p ? 'Only people you add' : 'Anyone in the workspace can join'}</span>
@@ -54,7 +54,7 @@ export function NewChannel({onClose}: {onClose: () => void}) {
                 {error && <p className='text-[12.5px] text-alert'>{error}</p>}
                 <div className='flex justify-end gap-2 pt-1'>
                     <button type='button' className={ghostBtn} onClick={onClose}>Cancel</button>
-                    <button type='submit' className={primaryBtn} disabled={busy || !name.trim()}>{busy ? 'Creating…' : 'Create channel'}</button>
+                    <button type='submit' className={primaryBtn} disabled={busy || !name.trim()}>{busy ? 'Creating…' : 'Create group chat'}</button>
                 </div>
             </form>
         </Modal>
@@ -83,17 +83,17 @@ export function BrowseChannels({onClose}: {onClose: () => void}) {
         }
     };
     return (
-        <Modal title='Channels' onClose={onClose}>
+        <Modal title='Open group chats' onClose={onClose}>
             {error && <p className='mb-2 text-[12.5px] text-alert'>{error}</p>}
             {!list && !error && <p className='py-6 text-center text-[13px] text-muted'>Loading…</p>}
-            {list?.length === 0 && <p className='py-6 text-center text-[13px] text-muted'>No public channels yet.</p>}
+            {list?.length === 0 && <p className='py-6 text-center text-[13px] text-muted'>No open group chats yet.</p>}
             <div className='space-y-1'>
                 {list?.map((c) => (
                     <button key={c.id} type='button' onClick={() => void open(c)} className='flex w-full items-center gap-3 rounded-2xl px-2.5 py-2 text-left hover:bg-tint'>
                         <ChatIcon channel={c} size={30}/>
                         <span className='min-w-0 flex-1'>
                             <span className='block truncate text-[13.5px] font-bold text-ink'>{c.displayName}</span>
-                            <span className='block truncate text-[12px] text-muted'>{c.purpose || `#${c.name}`}</span>
+                            <span className='block truncate text-[12px] text-muted'>{c.purpose || 'Group chat'}</span>
                         </span>
                         <span className={`text-[12px] font-semibold ${mine[c.id] ? 'text-muted' : 'text-accent-text'}`}>{mine[c.id] ? 'Joined' : 'Join'}</span>
                     </button>

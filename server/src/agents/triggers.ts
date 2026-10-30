@@ -10,9 +10,12 @@
 // - a reply in a thread an agent was working in, with no mention: that agent
 //   continues (Captain, with the same team, for a coordinated thread)
 // @captain on its own answers directly or plans the work across the team.
+// - anything else a person writes in a group chat, with no @mentions: Captain
+//   may join in on its own when it can help (joinin.ts decides, as a job)
 // Agents never trigger on other agents' messages, so they can't loop.
 
 import type {Ctx} from '../app/context.js';
+import {config} from '../config.js';
 import {toChannel as publishToChannel} from '../app/events.js';
 import type {SavedPost} from '../app/hooks.js';
 import {tx} from '../db/index.js';
@@ -20,6 +23,8 @@ import {type AgentRow, getAgent, getAgentsByUserIds, listAgents} from '../store/
 import {addChannelMember, listChannelMemberIds} from '../store/channels.js';
 import {createRun} from '../store/runs.js';
 import {log} from '../util/log.js';
+
+import {considerJoining, worthConsidering} from './joinin.js';
 
 const MAX_AGENTS_PER_MESSAGE = 6;
 
@@ -79,6 +84,7 @@ async function agentsToRun(ctx: Ctx, saved: SavedPost): Promise<Chosen> {
 }
 
 export function registerTriggers(ctx: Ctx): void {
+    ctx.jobs.register<{postId: string}>('captain.consider', (p) => considerJoining(ctx, p.postId), {maxAttempts: 1});
     ctx.hooks.afterPostSave(async (saved) => {
         const {post, channel, author} = saved;
         if (author.isBot || post.type !== '' || channel.deletedAt) {
@@ -86,6 +92,10 @@ export function registerTriggers(ctx: Ctx): void {
         }
         const {agents, team} = await agentsToRun(ctx, saved);
         if (!agents.length) {
+            // Nobody was asked. In a group chat, Captain may still join in.
+            if (channel.type !== 'D' && channel.captainJoinsIn && !ctx.router.demoMode && !mentionedHandles(post.message).length && worthConsidering(post.message)) {
+                await ctx.jobs.enqueue(ctx.sql, 'captain.consider', {postId: post.id}, {dedupeKey: `consider:${post.id}`, delayMs: config.agents.joinInDelayMs});
+            }
             return;
         }
         // In a DM, answer in the conversation; elsewhere, in the message's thread.

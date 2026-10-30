@@ -253,7 +253,7 @@ function InboxView({items, working, onOpen, onWrite}: {items: NeedsYouItem[]; wo
     const [error, setError] = useState<string | null>(null);
     const where = (channelId: string) => {
         const c = channels[channelId];
-        return !c ? '' : c.type === 'D' ? 'in your messages' : c.type === 'G' ? 'in a group message' : `in # ${channelTitle(c, me?.id, users)}`;
+        return !c ? '' : c.type === 'D' ? 'in your messages' : `in ${channelTitle(c, me?.id, users)}`;
     };
     const approve = async (post: Post) => {
         setBusy(post.id);
@@ -325,7 +325,7 @@ function InboxView({items, working, onOpen, onWrite}: {items: NeedsYouItem[]; wo
                                             <button type='button' onClick={() => {
                                                 const c = channels[item.channelId];
                                                 const name = channelTitle(c, me?.id, users);
-                                                void emitTo('orb', 'orb-reply', {channelId: item.channelId, rootId: c?.type === 'D' || c?.type === 'G' ? post?.rootId ?? null : post?.rootId || post?.id || null, where: c?.type === 'D' || c?.type === 'G' ? name : `# ${name}`} satisfies ReplyByVoice);
+                                                void emitTo('orb', 'orb-reply', {channelId: item.channelId, rootId: c?.type === 'D' || c?.type === 'G' ? post?.rootId ?? null : post?.rootId || post?.id || null, where: name} satisfies ReplyByVoice);
                                                 void hidePanel();
                                             }} className={`${pillBtn} h-8 bg-surface px-3.5 text-ink ring-1 ring-line hover:bg-tint`}>
                                                 <Mic size={14}/> Reply by voice

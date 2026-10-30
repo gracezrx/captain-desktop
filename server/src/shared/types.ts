@@ -45,6 +45,7 @@ export type Channel = {
     createdAt: Ms;
     lastPostAt: Ms;
     totalMsgCount: number;
+    captainJoinsIn: boolean; // Captain may join this group chat on its own when it can help
     memberIds?: ID[]; // filled for direct and group messages
 };
 
@@ -103,6 +104,8 @@ export type PostProps = {
     decision?: DecisionCard;
     step?: {runId: ID; stepId: string; title: string};
     error?: string;
+    joinedIn?: boolean; // Captain wrote this without being asked
+    joinedInBecause?: string; // what Captain saw it could help with
     [key: string]: unknown;
 };
 

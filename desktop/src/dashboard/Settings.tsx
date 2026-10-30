@@ -100,7 +100,7 @@ function People({admin}: {admin: boolean}) {
             {ws.role !== 'guest' && (
                 <section>
                     <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Invite people</h3>
-                    <p className='mb-2 text-[12.5px] text-muted'>Anyone with the link can join for 14 days. Guests only see channels they're added to.</p>
+                    <p className='mb-2 text-[12.5px] text-muted'>Anyone with the link can join for 14 days. Guests only see group chats they're added to.</p>
                     <div className='flex gap-2'>
                         <select className={`${input} w-36`} value={role} onChange={(e) => setRole(e.target.value as WorkspaceRole)}>
                             <option value='member'>Member</option>

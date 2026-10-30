@@ -109,6 +109,10 @@ export const config = {
         maxParallelSteps: int('AGENT_MAX_PARALLEL', 3),
         maxSteps: int('AGENT_MAX_PLAN_STEPS', 6),
         maxToolRounds: int('AGENT_MAX_TOOL_ROUNDS', 6),
+        // Captain joining group chats unasked: how long it waits first, and how
+        // long before it joins in the same chat again.
+        joinInDelayMs: int('CAPTAIN_JOIN_IN_DELAY_MS', 4000),
+        joinInCooldownMs: int('CAPTAIN_JOIN_IN_COOLDOWN_MS', 180_000),
     },
     workers: {
         enabled: bool('WORKERS', true),

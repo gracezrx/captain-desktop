@@ -18,6 +18,7 @@ export type RunRow = {
     error: string | null;
     costUsd: number;
     team: string[] | null; // agents named in the message; Captain coordinates just them
+    unprompted: boolean; // Captain joined in without being asked
     createdAt: number;
     updatedAt: number;
 };
@@ -68,11 +69,11 @@ export function toRun(r: RunRow, steps: StepRow[]): Run {
     };
 }
 
-export async function createRun(db: Db, r: Pick<RunRow, 'workspaceId' | 'channelId' | 'rootPostId' | 'triggerPostId' | 'requestedBy' | 'agentId' | 'kind' | 'goal'> & {status?: RunStatus; team?: string[] | null}): Promise<RunRow> {
+export async function createRun(db: Db, r: Pick<RunRow, 'workspaceId' | 'channelId' | 'rootPostId' | 'triggerPostId' | 'requestedBy' | 'agentId' | 'kind' | 'goal'> & {status?: RunStatus; team?: string[] | null; unprompted?: boolean}): Promise<RunRow> {
     const t = now();
     const [row] = await db`
-        insert into runs (id, workspace_id, channel_id, root_post_id, trigger_post_id, requested_by, agent_id, kind, status, goal, team, created_at, updated_at)
-        values (${newId()}, ${r.workspaceId}, ${r.channelId}, ${r.rootPostId}, ${r.triggerPostId}, ${r.requestedBy}, ${r.agentId}, ${r.kind}, ${r.status ?? 'queued'}, ${r.goal}, ${r.team?.length ? r.team : null}, ${t}, ${t})
+        insert into runs (id, workspace_id, channel_id, root_post_id, trigger_post_id, requested_by, agent_id, kind, status, goal, team, unprompted, created_at, updated_at)
+        values (${newId()}, ${r.workspaceId}, ${r.channelId}, ${r.rootPostId}, ${r.triggerPostId}, ${r.requestedBy}, ${r.agentId}, ${r.kind}, ${r.status ?? 'queued'}, ${r.goal}, ${r.team?.length ? r.team : null}, ${r.unprompted ?? false}, ${t}, ${t})
         returning *`;
     return row as unknown as RunRow;
 }

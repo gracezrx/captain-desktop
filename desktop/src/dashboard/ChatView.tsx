@@ -87,8 +87,9 @@ function Chat({channelId, onModels}: {channelId: string; onModels: () => void}) 
     const title = channelTitle(channel, me.id, users);
     const agentUser = isAgentChannel(channel, me.id, users) ? users[otherUserId(channel, me.id)] : undefined;
     const agent = agentForUser(agents, agentUser?.id);
-    const subtitle = agent ? agent.description || 'Agent' : channel.purpose || (channel.type === 'D' ? 'Direct message' : channel.type === 'P' ? 'Private channel' : 'Channel');
+    const subtitle = agent ? agent.description || 'Agent' : channel.purpose || (channel.type === 'D' ? 'Direct message' : channel.type === 'P' ? 'Private group chat' : 'Group chat');
     const isChannel = channel.type === 'O' || channel.type === 'P';
+    const isGroup = channel.type !== 'D';
 
     return (
         <div className='flex min-h-0 min-w-0 flex-1'>
@@ -99,6 +100,7 @@ function Chat({channelId, onModels}: {channelId: string; onModels: () => void}) 
                         <h1 className='truncate text-[16px] font-extrabold tracking-tight text-ink'>{title}</h1>
                         <p className='truncate text-[12px] text-muted'>{subtitle}</p>
                     </div>
+                    {isGroup && <JoinsIn channelId={channelId} on={channel.captainJoinsIn !== false}/>}
                     {isChannel && <ChannelMenu channelId={channelId} general={channel.name === 'general'}/>}
                 </header>
                 {demoMode && agent && (
@@ -167,7 +169,7 @@ function Chat({channelId, onModels}: {channelId: string; onModels: () => void}) 
                             variant='dashboard'
                             draftKey={channelId}
                             autoFocus
-                            placeholder={agent ? `Message ${agent.name}` : isChannel ? `Message #${channel.name} · @ to bring in an agent` : `Message ${title}`}
+                            placeholder={agent ? `Message ${agent.name}` : isGroup ? `Message ${title} · @ to bring in an agent` : `Message ${title}`}
                             onSent={(post) => {
                                 nearBottom.current = true;
                                 // Calling on an agent in a channel: watch it work in the thread.
@@ -199,9 +201,38 @@ function Empty({channelId, title, agentName, isCoordinator}: {channelId: string;
                 {isCoordinator ?
                     'Ask a question, or hand over something bigger. Captain plans it, brings in the right agents and models, and checks with you before anything leaves the workspace.' :
                     agentName ? 'Ask anything, attach a screenshot, or hold ⌥ to talk.' :
-                    'Type @ to bring an agent into the conversation. @captain plans bigger work with the whole team.'}
+                    'Captain joins in when it can help. Type @ to bring in a specific agent; @captain plans bigger work with the whole team.'}
             </p>
         </div>
+    );
+}
+
+// Whether Captain joins this group chat on its own when it can help.
+function JoinsIn({channelId, on}: {channelId: string; on: boolean}) {
+    const addChannel = useStore((s) => s.addChannel);
+    const [busy, setBusy] = useState(false);
+    const toggle = async () => {
+        setBusy(true);
+        try {
+            addChannel(await api.updateChannel(channelId, {captainJoinsIn: !on}));
+        } catch {
+            // the button shows the saved state
+        } finally {
+            setBusy(false);
+        }
+    };
+    return (
+        <button
+            type='button'
+            onClick={() => void toggle()}
+            disabled={busy}
+            aria-pressed={on}
+            title={on ? 'Captain joins in when it can help. Click to only answer when someone writes @captain.' : 'Captain only answers when someone writes @captain. Click to let it join in when it can help.'}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold ring-1 transition-colors disabled:opacity-60 ${on ? 'bg-tint text-accent-text ring-accent/30' : 'text-muted ring-line hover:bg-tint hover:text-ink'}`}
+        >
+            <img src='/captain-mark.png' alt='' className={`size-3.5 ${on ? '' : 'opacity-50 grayscale'}`}/>
+            {on ? 'Captain joins in' : 'Captain: only when @'}
+        </button>
     );
 }
 
@@ -235,7 +266,7 @@ function ChannelMenu({channelId, general}: {channelId: string; general: boolean}
                             <>
                                 <button type='button' onClick={() => setAdding(true)} className='flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] text-text hover:bg-tint'><AtSign size={14}/> Add people or agents</button>
                                 {!general && (
-                                    <button type='button' onClick={() => api.leaveChannel(channelId).then(() => dropChannel(channelId)).catch((e) => setError(errorMessage(e)))} className='flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] text-text hover:bg-tint'><LogOut size={14}/> Leave channel</button>
+                                    <button type='button' onClick={() => api.leaveChannel(channelId).then(() => dropChannel(channelId)).catch((e) => setError(errorMessage(e)))} className='flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] text-text hover:bg-tint'><LogOut size={14}/> Leave group chat</button>
                                 )}
                             </>
                         ) : (

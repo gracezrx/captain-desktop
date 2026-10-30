@@ -320,7 +320,7 @@ function useWhere(channelId: string): string {
         return '';
     }
     const title = channelTitle(channel, meId, users);
-    return channel.type === 'O' || channel.type === 'P' ? `#${title.replace(/^#/, '')}` : title;
+    return title.replace(/^#/, '');
 }
 
 const STATUS: Record<string, {label: string; icon: ReactNode; cls: string}> = {

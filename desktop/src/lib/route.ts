@@ -19,8 +19,8 @@ export type Route = {
     reply?: {rootId: string | null}; // a reply in that chat (to this thread), from "Reply by voice"
 };
 
-// Channel names that are also everyday words need "#", "channel", "room" or
-// "chat" next to them ("in general" alone isn't a chat).
+// Group chat names that are also everyday words need "#", "group chat",
+// "channel", "room" or "chat" next to them ("in general" alone isn't a chat).
 const EVERYDAY = new Set(['general', 'random', 'team', 'all', 'news', 'updates', 'design', 'research', 'launch', 'ops', 'help', 'support', 'sales', 'marketing', 'product', 'engineering', 'fun', 'social']);
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -43,7 +43,7 @@ function channelScore(text: string, name: string): number {
     if (new RegExp(`#\\s*${body}\\b`).test(t)) {
         return 4 + n.length;
     }
-    if (new RegExp(`\\b${body}\\s+(?:channel|room|chat|thread)\\b`).test(t)) {
+    if (new RegExp(`\\b${body}\\s+(?:group\\s+chat|group|channel|room|chat|thread)\\b`).test(t)) {
         return 3 + n.length;
     }
     if (n.includes(' ') && /\b(?:room|channel|chat)$/.test(n) && new RegExp(`\\b${body}\\b`).test(t)) {

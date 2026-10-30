@@ -244,7 +244,7 @@ export function Orb() {
     const sendToChat = useCallback(async (text: string) => {
         const route = pickRef.current ?? routeFor(text, dirRef.current);
         const id = crypto.randomUUID();
-        const where = route.reply && route.channel ? route.channel.name : route.channel ? `# ${route.channel.name}` : route.dmWith?.name ?? 'Captain';
+        const where = route.channel ? route.channel.name : route.dmWith?.name ?? 'Captain';
         setTask({id, where, lead: route.dmWith?.name ?? (route.agents.length === 1 ? route.agents[0].name : 'Captain'), team: route.agents.length > 1 ? route.agents.map((a) => a.handle) : [], steps: [], channelId: null, rootId: null, sentAt: Date.now()});
         setPhase('working');
         try {
@@ -848,7 +848,7 @@ export function Orb() {
                             <img src={portraitSrc(agentById(answer.agentId)?.portrait, agentById(answer.agentId)?.handle ?? 'captain')} alt='' style={{width: 30, height: 30, borderRadius: 9999, background: '#fff', boxShadow: '0 0 0 1px rgba(20,39,105,0.08)'}}/>
                             <div style={{display: 'flex', flexDirection: 'column', minWidth: 0}}>
                                 <span style={{fontSize: 14, fontWeight: 800}}>{answer.by}</span>
-                                <span style={{fontSize: 12, fontWeight: 600, color: '#4f5c78'}}>{answer.where.startsWith('#') ? `in ${answer.where}` : 'in your direct message'}</span>
+                                <span style={{fontSize: 12, fontWeight: 600, color: '#4f5c78'}}>{orb.directory.channels.some((c) => c.id === answer.channelId) ? `in ${orb.directory.channels.find((c) => c.id === answer.channelId)!.name}` : 'in your direct message'}</span>
                             </div>
                             <button type='button' className='fc-x' aria-label='Dismiss' onPointerDown={(e) => e.stopPropagation()} onClick={() => setAnswer(null)}><X size={15}/></button>
                         </div>

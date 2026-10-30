@@ -64,6 +64,7 @@ export function MessageRow({post, grouped = false, compact = false, inThread = f
                     <div className='flex items-baseline gap-2'>
                         <span className={`font-bold text-ink ${compact ? 'text-[12.5px]' : 'text-[13.5px]'}`}>{displayName(user)}</span>
                         {isAgent && <span className='rounded-full bg-tint px-1.5 py-px text-[10px] font-bold tracking-wide text-accent-text uppercase'>agent</span>}
+                        {isAgent && post.props.joinedIn && <span className='text-[11px] font-semibold text-muted' title='Nobody asked; Captain joined in because it could help. Turn this off for a group chat with the switch at the top.'>joined in</span>}
                         <span className='text-[11px] text-muted'>{timeOfDay(post.createdAt)}</span>
                         {post.editedAt && <span className='text-[11px] text-muted'>(edited)</span>}
                     </div>

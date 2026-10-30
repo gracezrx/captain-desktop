@@ -1,4 +1,4 @@
-import {Check, ChevronDown, Keyboard, LayoutDashboard, LogOut, Plus, Search, Settings as Gear, TextSearch} from 'lucide-react';
+import {Check, ChevronDown, Keyboard, LayoutDashboard, LogOut, Pin, Plus, Search, Settings as Gear, TextSearch} from 'lucide-react';
 import {useMemo, useState} from 'react';
 
 import {Avatar, portraitSrc} from '../components/Avatar';
@@ -60,6 +60,9 @@ export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction:
         }
     };
 
+    // Captain is pinned at the top; the other agents are listed under it.
+    const pinned = agentRows.find((r) => r.agent.isCoordinator);
+    const otherAgents = agentRows.filter((r) => !r.agent.isCoordinator);
     const channelsList = chats.filter((c) => c.kind === 'channel' && match(c.title));
     const dms = chats.filter((c) => c.kind === 'dm' && match(c.title));
 
@@ -157,10 +160,12 @@ export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction:
                     </section>
                 )}
 
-                {agentRows.length > 0 && (
+                {pinned && <PinnedCaptain agent={pinned.agent} chat={pinned.chat} active={pinned.chat?.channel.id === active} onOpen={() => void openAgent(pinned.agent, pinned.chat)}/>}
+
+                {otherAgents.length > 0 && (
                     <section className='mb-1'>
                         <h2 className='px-2.5 pt-3 pb-1 text-[11.5px] font-bold text-nav-muted'>Agents</h2>
-                        {agentRows.map(({agent, chat}) => {
+                        {otherAgents.map(({agent, chat}) => {
                             const isActive = chat?.channel.id === active;
                             const bold = (chat?.unread ?? 0) > 0;
                             return (
@@ -171,6 +176,7 @@ export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction:
                                     className={`mb-px flex h-10 w-full items-center gap-2.5 rounded-xl px-2.5 text-left transition-colors ${isActive ? 'bg-[var(--active-chat)] ring-1 ring-nav-line' : 'hover:bg-white/60 dark:hover:bg-white/5'}`}
                                     style={isActive ? {boxShadow: 'var(--shadow-control)'} : undefined}
                                     title={agent.description}
+                                    aria-label={agent.name}
                                 >
                                     <span className='grid size-[26px] shrink-0 place-items-center overflow-hidden rounded-lg bg-white ring-1 ring-line'>
                                         <img src={portraitSrc(agent.portrait, agent.handle)} alt='' className={agent.isCoordinator ? 'size-[72%]' : 'size-full'}/>
@@ -183,7 +189,7 @@ export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction:
                     </section>
                 )}
 
-                <Section label='Channels' onAdd={() => onAction('new-channel')} addLabel='New channel' extra={<button type='button' onClick={() => onAction('browse')} className='text-[11px] font-semibold text-nav-muted hover:text-nav-text'>Browse</button>}>
+                <Section label='Group chats' onAdd={() => onAction('new-channel')} addLabel='New group chat' extra={<button type='button' onClick={() => onAction('browse')} className='text-[11px] font-semibold text-nav-muted hover:text-nav-text'>Browse</button>}>
                     {channelsList.map((c) => <ChatRow key={c.channel.id} chat={c} active={c.channel.id === active} onClick={() => setActive(c.channel.id)}/>)}
                 </Section>
                 <Section label='Direct messages' onAdd={() => onAction('new-dm')} addLabel='New message'>
@@ -212,6 +218,38 @@ export function Sidebar({onSignOut, onAction}: {onSignOut: () => void; onAction:
                 </button>
             </div>
         </aside>
+    );
+}
+
+// Captain, pinned above everything else: your conversation with it, and
+// what it last said.
+function PinnedCaptain({agent, chat, active, onOpen}: {agent: Agent; chat?: ChatEntry; active: boolean; onOpen: () => void}) {
+    const posts = useStore((s) => s.posts);
+    const ids = useStore((s) => (chat ? s.postsByChannel[chat.channel.id] : undefined));
+    const last = ids?.length ? posts[ids[ids.length - 1]] : undefined;
+    const preview = last ? plain(last.message).split('\n')[0] : 'Ask anything, or hand over something bigger';
+    const unread = (chat?.unread ?? 0) > 0;
+    return (
+        <button
+            type='button'
+            onClick={onOpen}
+            aria-label={`${agent.name}, pinned`}
+            aria-current={active ? 'page' : undefined}
+            className={`mb-1 flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2 text-left ring-1 transition-colors ${active ? 'bg-[var(--active-chat)] ring-nav-line' : 'bg-white/70 ring-nav-line hover:bg-white dark:bg-white/5 dark:hover:bg-white/10'}`}
+            style={{boxShadow: 'var(--shadow-control)'}}
+        >
+            <span className='grid size-9 shrink-0 place-items-center overflow-hidden rounded-xl bg-white ring-1 ring-line'>
+                <img src={portraitSrc(agent.portrait, agent.handle)} alt='' className='size-[72%]'/>
+            </span>
+            <span className='min-w-0 flex-1'>
+                <span className='flex items-center gap-1.5'>
+                    <span className='truncate text-[14px] font-extrabold text-nav-text'>{agent.name}</span>
+                    <Pin size={11} className='shrink-0 text-nav-muted' aria-hidden/>
+                </span>
+                <span className={`block truncate text-[12px] ${unread ? 'font-semibold text-nav-text' : 'text-nav-muted'}`}>{preview}</span>
+            </span>
+            {unread && <span className='size-2 shrink-0 rounded-full bg-accent'/>}
+        </button>
     );
 }
 
