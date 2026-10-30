@@ -29,9 +29,16 @@ export async function dashboard(ctx: Ctx, user: UserRow, workspaceId: string, of
     ]);
     // Tokens and spend are for owners and admins (as in Settings → Models & spend).
     const admin = atLeast(role, 'admin');
-    const tokens = admin ? await tokensByRun(ctx.sql, workspaceId, [...active, ...recent].map((r) => r.id)) : new Map<string, number>();
-    const shape = async (r: RunRow): Promise<ActivityRun> => {
-        const run = toRun(r, await listSteps(ctx.sql, r.id));
+    const runs = [...active, ...recent];
+    // Sent together: a hosted database is a round trip away.
+    const [tokens, steps, usage] = await Promise.all([
+        admin ? tokensByRun(ctx.sql, workspaceId, runs.map((r) => r.id)) : new Map<string, number>(),
+        Promise.all(runs.map((r) => listSteps(ctx.sql, r.id))),
+        admin ? getWorkspace(ctx.sql, workspaceId).then((ws) => usageOverview(ctx.sql, workspaceId, ws?.monthlyBudgetUsd ?? null, offsetMin, at)) : null,
+    ]);
+    const stepsOf = new Map(runs.map((r, i) => [r.id, steps[i]]));
+    const shape = (r: RunRow): ActivityRun => {
+        const run = toRun(r, stepsOf.get(r.id) ?? []);
         return {
             ...run,
             costUsd: admin ? run.costUsd : 0,
@@ -39,10 +46,5 @@ export async function dashboard(ctx: Ctx, user: UserRow, workspaceId: string, of
             agentId: r.agentId, requestedBy: r.requestedBy, team: r.team ?? null, triggerPostId: r.triggerPostId, tokens: tokens.get(r.id) ?? 0,
         };
     };
-    let usage = null;
-    if (admin) {
-        const ws = await getWorkspace(ctx.sql, workspaceId);
-        usage = await usageOverview(ctx.sql, workspaceId, ws?.monthlyBudgetUsd ?? null, offsetMin, at);
-    }
-    return {active: await Promise.all(active.map(shape)), recent: await Promise.all(recent.map(shape)), counts, usage};
+    return {active: active.map(shape), recent: recent.map(shape), counts, usage};
 }

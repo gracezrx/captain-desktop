@@ -91,7 +91,23 @@ function parse(text: string): Block[] {
     return out;
 }
 
-const TOKEN = /(\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<]+[^\s<.,;:!?)\]'"]|@[a-z0-9][a-z0-9._-]*)/gi;
+const TOKEN = /(\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<]+[^\s<.,;:!?\]'"]|@[a-z0-9][a-z0-9._-]*)/gi;
+
+// A link's end: not the punctuation after it, nor the ")" closing the
+// parentheses it was written in (its own stay: …/wiki/Slack_(software)).
+export function trimLink(raw: string): string {
+    let s = raw;
+    for (;;) {
+        const t = s.replace(/[.,;:!?]+$/, '');
+        const opens = (t.match(/\(/g) ?? []).length;
+        const closes = (t.match(/\)/g) ?? []).length;
+        const next = t.endsWith(')') && closes > opens ? t.slice(0, -1) : t;
+        if (next === s) {
+            return s;
+        }
+        s = next;
+    }
+}
 
 function inline(text: string, me?: string, key = ''): ReactNode[] {
     const out: ReactNode[] = [];
@@ -103,7 +119,11 @@ function inline(text: string, me?: string, key = ''): ReactNode[] {
             out.push(text.slice(last, at));
         }
         const k = `${key}-${at}`;
-        if (t.startsWith('**') || t.startsWith('__')) {
+        // Underscores inside a word (tool_call_id, snake_case) aren't emphasis.
+        const inWord = t.startsWith('_') && (/\w/.test(text[at - 1] ?? '') || /\w/.test(text[at + t.length] ?? ''));
+        if (inWord) {
+            out.push(t);
+        } else if (t.startsWith('**') || t.startsWith('__')) {
             out.push(<strong key={k} className='font-bold text-ink'>{inline(t.slice(2, -2), me, k)}</strong>);
         } else if ((t.startsWith('*') || t.startsWith('_')) && t.length > 2) {
             out.push(<em key={k}>{inline(t.slice(1, -1), me, k)}</em>);
@@ -113,10 +133,24 @@ function inline(text: string, me?: string, key = ''): ReactNode[] {
             const [, label, href] = t.match(/^\[([^\]]+)\]\((.+)\)$/) ?? [];
             out.push(<a key={k} href={href} target='_blank' rel='noreferrer' className='font-medium text-accent-text underline decoration-1 underline-offset-2'>{label}</a>);
         } else if (t.startsWith('@')) {
-            const self = me && t.slice(1).toLowerCase() === me.toLowerCase();
-            out.push(<span key={k} className={`rounded px-0.5 font-semibold ${self ? 'bg-gold-tint text-gold-text' : 'text-accent-text'}`}>{t}</span>);
+            // Part of an email address (qa@example.com) isn't a mention; nor is
+            // a full stop after one ("ask @writer.").
+            if (at > 0 && /[\w.+-]/.test(text[at - 1])) {
+                out.push(t);
+            } else {
+                const handle = t.replace(/[._-]+$/, '');
+                const self = me && handle.slice(1).toLowerCase() === me.toLowerCase();
+                out.push(<span key={k} className={`rounded px-0.5 font-semibold ${self ? 'bg-gold-tint text-gold-text' : 'text-accent-text'}`}>{handle}</span>);
+                if (handle.length < t.length) {
+                    out.push(t.slice(handle.length));
+                }
+            }
         } else {
-            out.push(<a key={k} href={t} target='_blank' rel='noreferrer' className='break-all text-accent-text underline decoration-1 underline-offset-2'>{t}</a>);
+            const href = trimLink(t);
+            out.push(<a key={k} href={href} target='_blank' rel='noreferrer' className='break-all text-accent-text underline decoration-1 underline-offset-2'>{href}</a>);
+            if (href.length < t.length) {
+                out.push(t.slice(href.length));
+            }
         }
         last = at + t.length;
     }

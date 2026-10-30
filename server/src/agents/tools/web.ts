@@ -95,13 +95,30 @@ export function checkUrl(raw: string): URL {
 // Links that people shared or a search returned (an agent may read those freely).
 export function linksIn(text: string): Set<string> {
     const out = new Set<string>();
-    for (const m of text.matchAll(/https?:\/\/(?:\[[0-9a-f:.]+\]|[^\s<>"'`)\]/]+)[^\s<>"'`)\]]*/gi)) {
-        const href = normalize(m[0].replace(/[.,;:!?]+$/, ''));
+    for (const m of text.matchAll(/https?:\/\/(?:\[[0-9a-f:.]+\]|[^\s<>"'`)\]/]+)[^\s<>"'`\]]*/gi)) {
+        const href = normalize(trimLink(m[0]));
         if (href) {
             out.add(href);
         }
     }
     return out;
+}
+
+// A link's end: not the full stop after it, nor the ")" closing the
+// parentheses it was written in. Its own parentheses stay, as in
+// https://en.wikipedia.org/wiki/Slack_(software).
+export function trimLink(raw: string): string {
+    let s = raw;
+    for (;;) {
+        const t = s.replace(/[.,;:!?]+$/, '');
+        const opens = (t.match(/\(/g) ?? []).length;
+        const closes = (t.match(/\)/g) ?? []).length;
+        const next = t.endsWith(')') && closes > opens ? t.slice(0, -1) : t;
+        if (next === s) {
+            return s;
+        }
+        s = next;
+    }
 }
 
 function normalize(raw: string): string | null {

@@ -13,7 +13,7 @@ import {shortWhen} from '../lib/format';
 import {isTauri} from '../lib/native';
 import {openSetup} from '../lib/setup';
 import {useShortcutLabels} from '../lib/shortcuts';
-import {channelTitle, decisionOf, displayName, needsYou, useStore} from '../lib/store';
+import {channelTitle, decisionOf, displayName, needsYou, otherUserId, useStore} from '../lib/store';
 import type {ActivityRun, Agent, Dashboard, DashboardUsage} from '../lib/types';
 
 const REFRESH_MS = 30_000;
@@ -106,13 +106,25 @@ export function Overview({onInvite, onModels}: {onInvite: () => void; onModels: 
     const captain = Object.values(agents).find((a) => a.isCoordinator);
     const admin = Boolean(data?.usage);
 
+    const [opening, setOpening] = useState(false);
     const askCaptain = async () => {
-        if (!captain || !workspace) {
+        if (!captain || !workspace || opening) {
             return;
         }
-        const c = await api.directMessage(workspace.id, captain.userId);
-        addChannel(c);
-        setActive(c.id);
+        // Your conversation with Captain, if it's already loaded; else ask for it.
+        const known = Object.values(useStore.getState().channels).find((c) => c.type === 'D' && me && otherUserId(c, me.id) === captain.userId);
+        if (known) {
+            setActive(known.id);
+            return;
+        }
+        setOpening(true);
+        try {
+            const c = await api.directMessage(workspace.id, captain.userId);
+            addChannel(c);
+            setActive(c.id);
+        } finally {
+            setOpening(false);
+        }
     };
     const openRun = (r: ActivityRun) => {
         setActive(r.channelId);
@@ -132,7 +144,7 @@ export function Overview({onInvite, onModels}: {onInvite: () => void; onModels: 
                     </div>
                     {captain && (
                         <button type='button' onClick={() => void askCaptain()} className='inline-flex h-9 items-center gap-2 rounded-full bg-accent px-4 text-[13px] font-bold text-on-accent' style={{boxShadow: 'var(--shadow-send)'}}>
-                            <img src='/captain-mark.png' alt='' className='size-4 brightness-0 invert'/> Ask Captain
+                            <img src='/captain-mark.png' alt='' className='size-4 brightness-0 invert'/> {opening ? 'Opening…' : 'Ask Captain'}
                         </button>
                     )}
                     {workspace?.role !== 'guest' && (

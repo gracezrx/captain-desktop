@@ -45,7 +45,11 @@ export function connect(url = config.databaseUrl, max = config.databasePoolSize)
         max,
         idle_timeout: 30,
         connect_timeout: 10,
-        transform: postgres.camel,
+        // Column names only. postgres.camel also renames keys inside json
+        // values (tool_call_id → toolCallId), which broke saved agent
+        // conversations: after an approval the model got tool messages
+        // without their ids and refused them.
+        transform: {column: {from: postgres.toCamel, to: postgres.fromCamel}},
         types: {
             bigint: {to: 20, from: [20], serialize: (x: number) => String(x), parse: (x: string) => Number(x)},
         },

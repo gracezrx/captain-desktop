@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import {after, before, describe, it} from 'node:test';
 
-import {blockedAddress, checkUrl} from '../src/agents/tools/web.js';
+import {blockedAddress, checkUrl, linksIn} from '../src/agents/tools/web.js';
 import {Catalog} from '../src/llm/catalog.js';
 
 import {client, expectStatus, fakeProvider, type FakeRequest, lastUserText, model, signup, socket, startServer, type TestServer, waitFor} from './helpers.js';
@@ -97,6 +97,11 @@ describe('security', () => {
         const thread: Post[] = await owner.api.get(`/posts/${post.id}/thread`);
         assert.ok(!thread.some((p) => p.type === 'decision'));
         assert.match(thread.at(-1)!.message, /private network/);
+    });
+
+    it('finds shared links with their own parentheses, without the ones around them', () => {
+        const found = [...linksIn('Using https://en.wikipedia.org/wiki/Slack_(software): and (see https://example.com/a). Also [docs](https://example.com/docs) and https://example.com/x_(y)_(z).')];
+        assert.deepEqual(found, ['https://en.wikipedia.org/wiki/Slack_(software)', 'https://example.com/a', 'https://example.com/docs', 'https://example.com/x_(y)_(z)']);
     });
 
     it('blocks private, mapped and odd-port addresses', () => {

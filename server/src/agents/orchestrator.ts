@@ -94,7 +94,7 @@ export class Orchestrator {
     }
 
     async publishRun(run: RunRow): Promise<void> {
-        await publishToChannel(this.ctx, this.ctx.sql, run.channelId, {event: 'run_updated', data: {runId: run.id, channelId: run.channelId, status: run.status}});
+        await publishToChannel(this.ctx, this.ctx.sql, run.channelId, {event: 'run_updated', data: {runId: run.id, channelId: run.channelId, status: run.status, triggerPostId: run.triggerPostId}});
         if (run.cardPostId) {
             const steps = await listSteps(this.ctx.sql, run.id);
             const plan: PlanCard = {

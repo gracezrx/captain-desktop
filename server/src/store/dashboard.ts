@@ -71,7 +71,9 @@ export async function usageOverview(db: Db, workspaceId: string, budgetUsd: numb
     const month = monthStart(at);
     const fortnight = today - 13 * DAY;
     const from = Math.min(month, fortnight);
-    const [row] = await db`
+    const shift = offsetMin * 60_000;
+    // Three independent queries, sent together: a hosted database is a round trip away.
+    const [[row], days, byAgent] = await Promise.all([db`
         select
             coalesce(sum(tokens_in) filter (where created_at >= ${today}), 0)::bigint as today_in,
             coalesce(sum(tokens_out) filter (where created_at >= ${today}), 0)::bigint as today_out,
@@ -86,18 +88,15 @@ export async function usageOverview(db: Db, workspaceId: string, budgetUsd: numb
             coalesce(sum(cost_usd) filter (where created_at >= ${month}), 0)::float8 as month_usd,
             (count(*) filter (where created_at >= ${month}))::int as month_calls,
             (count(*) filter (where created_at >= ${today} and not ok))::int as errors_today
-        from usage_events where workspace_id = ${workspaceId} and created_at >= ${from}`;
-    const shift = offsetMin * 60_000;
-    const days = await db`
+        from usage_events where workspace_id = ${workspaceId} and created_at >= ${from}`, db`
         select floor((created_at - ${shift})::float8 / ${DAY})::bigint as d,
                coalesce(sum(tokens_in + tokens_out), 0)::bigint as tokens, coalesce(sum(cost_usd), 0)::float8 as usd
         from usage_events where workspace_id = ${workspaceId} and created_at >= ${fortnight}
-        group by d`;
-    const byDay = new Map(days.map((d) => [Number(d.d) * DAY + shift, {tokens: Number(d.tokens), usd: Number(d.usd)}]));
-    const byAgent = await db`
+        group by d`, db`
         select agent_id, coalesce(sum(tokens_in + tokens_out), 0)::bigint as tokens, coalesce(sum(cost_usd), 0)::float8 as usd
         from usage_events where workspace_id = ${workspaceId} and created_at >= ${month}
-        group by agent_id order by tokens desc`;
+        group by agent_id order by tokens desc`]);
+    const byDay = new Map(days.map((d) => [Number(d.d) * DAY + shift, {tokens: Number(d.tokens), usd: Number(d.usd)}]));
     return {
         today: totals(row, 'today'),
         week: totals(row, 'week'),

@@ -157,7 +157,10 @@ function handleEvent(msg: ServerEvent, sendsNotifications: boolean): void {
         break;
     }
     case 'run_updated':
-        useStore.setState((s) => ({runs: {...s.runs, [msg.data.runId]: msg.data.status}}));
+        useStore.setState((s) => ({
+            runs: {...s.runs, [msg.data.runId]: msg.data.status},
+            runByTrigger: msg.data.triggerPostId ? {...s.runByTrigger, [msg.data.triggerPostId]: msg.data.status} : s.runByTrigger,
+        }));
         break;
     case 'user_updated':
         useStore.setState((s) => ({users: {...s.users, [msg.data.user.id]: {...s.users[msg.data.user.id], ...msg.data.user}}, me: s.me?.id === msg.data.user.id ? {...s.me, ...msg.data.user} : s.me}));

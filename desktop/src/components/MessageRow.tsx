@@ -117,6 +117,7 @@ export function MessageRow({post, grouped = false, compact = false, inThread = f
                 {!inThread && !post.rootId && post.replyCount > 0 && onOpenThread && (
                     <ThreadSummary post={post} onOpen={() => onOpenThread(post.id)}/>
                 )}
+                <Planning post={post}/>
             </div>
 
             {!compact && !post.pending && (
@@ -145,6 +146,20 @@ export function MessageRow({post, grouped = false, compact = false, inThread = f
                     )}
                 </div>
             )}
+        </div>
+    );
+}
+
+// Under a message Captain is making a plan for: before the plan card arrives
+// (planning can take a while), say so, so the message doesn't look ignored.
+function Planning({post}: {post: Post}) {
+    const status = useStore((s) => s.runByTrigger[post.id]);
+    if (status !== 'planning') {
+        return null;
+    }
+    return (
+        <div className='mt-1.5 inline-flex items-center gap-1.5 text-[12.5px] text-muted'>
+            <Dots/> Captain is working out who does what…
         </div>
     );
 }

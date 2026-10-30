@@ -25,6 +25,7 @@ type State = {
     hasMore: Record<string, boolean>;
     streams: Record<string, string>; // post id -> text an agent is still writing
     runs: Record<string, RunStatus>;
+    runByTrigger: Record<string, RunStatus>; // the message that started a run -> its status
     typing: Record<string, {userId: string; until: number}>;
     activeChannelId: string | null;
     threadRootId: string | null; // the thread open beside the chat
@@ -92,6 +93,7 @@ const initial: State = {
     hasMore: {},
     streams: {},
     runs: {},
+    runByTrigger: {},
     typing: {},
     activeChannelId: null,
     threadRootId: null,

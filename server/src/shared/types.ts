@@ -264,7 +264,7 @@ export type ServerEvent =
     | {event: 'channel_member_added' | 'channel_member_removed'; data: {channelId: ID; userId: ID}}
     | {event: 'channel_viewed'; data: {channelId: ID}}
     | {event: 'reaction_changed'; data: {postId: ID; channelId: ID; reactions: Post['reactions']}}
-    | {event: 'run_updated'; data: {runId: ID; channelId: ID; status: RunStatus}}
+    | {event: 'run_updated'; data: {runId: ID; channelId: ID; status: RunStatus; triggerPostId: ID | null}}
     | {event: 'user_updated'; data: {user: User}}
     | {event: 'workspace_member_added'; data: {workspaceId: ID; user: User; role: WorkspaceRole}};
 
