@@ -16,6 +16,18 @@ It comes in four parts:
 - **A web app** with the same interface, so testers can use a browser.
 - **A server** that does everything else: accounts, workspaces, chat, real time, model routing and multi-agent orchestration. It runs inside the Mac app, or hosted for a whole team.
 
+## Demo video
+
+[![Watch the 90-second demo](docs/media/captain-launch-demo.jpg)](docs/media/captain-launch-demo.mp4)
+
+[Watch the 90-second demo](docs/media/captain-launch-demo.mp4) (1080p, with sound). It shows:
+
+- talking to the little Captain: a request routed to Launch room and three agents, and a calendar question answered out loud
+- the corner panel: what needs you, approving and changing an email without opening the app
+- the full app as the control room: the default agents, threads and reactions, Captain joining a group chat, and Home
+
+It was filmed on the real app. The agents' answers are scripted best-case replies, Gmail and Calendar are stand-ins, and the spoken lines and narration are generated voices added in the edit.
+
 ![Dashboard](docs/screenshots/dashboard.png)
 
 | Agents work in threads, and ask before acting | Decide from the menu bar |
