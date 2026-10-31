@@ -36,6 +36,7 @@ export function agentSystem(agent: AgentRow, s: Setting, toolNames: string[]): s
         if (toolNames.includes('send_email') || toolNames.includes('request_approval')) {
             lines.push('Sending or publishing anything outside the workspace always waits for a person to approve it.');
         }
+        lines.push('Searching the web, opening pages and reading documents or the workspace never need anyone\'s permission: just do it, without asking.');
     }
     return lines.join('\n');
 }

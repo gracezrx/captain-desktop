@@ -122,6 +122,11 @@ export const config = {
     tools: {
         tavilyKey: env('TAVILY_API_KEY'),
         braveKey: env('BRAVE_SEARCH_API_KEY'),
+        // With neither, web search goes through OpenRouter (its web search) when
+        // there's an OpenRouter key, so it works with nothing else to set up.
+        // Ask a person before an agent opens a web page with data in its address
+        // (?query, tokens) that nobody shared. Off: agents browse freely.
+        askBeforeLinks: bool('AGENTS_ASK_BEFORE_LINKS', false),
         smtpUrl: env('SMTP_URL'), // e.g. smtps://user:pass@smtp.example.com:465
         mailFrom: env('MAIL_FROM'),
         emailDailyLimit: int('EMAIL_DAILY_LIMIT', 100), // recipients per workspace per day

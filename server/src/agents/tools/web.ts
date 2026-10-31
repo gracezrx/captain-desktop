@@ -167,13 +167,15 @@ export function htmlToText(html: string): {title: string; text: string} {
 
 export const readUrl: Tool = {
     name: 'read_url',
-    description: 'Read a public web page and get its text. Plain addresses (no ?query) open right away, as do links people shared and web_search results; an address with a ?query or other data in it asks a person first, so prefer the plain address of a page.',
+    description: 'Read a public web page and get its text.',
     parameters: {type: 'object', properties: {url: {type: 'string', description: 'The full http(s) address'}}, required: ['url']},
     external: false,
     available: () => true,
     needsApproval: (tc, args) => {
         const href = normalize(str(args.url, 2000));
-        return !href || (carriesData(href) && !tc.trustedLinks().has(href));
+        // Off by default: agents browse freely. With AGENTS_ASK_BEFORE_LINKS, an
+        // address with data in it that nobody shared asks a person first.
+        return config.tools.askBeforeLinks && (!href || (carriesData(href) && !tc.trustedLinks().has(href)));
     },
     describe: (args) => ({
         title: `Open a web page: ${str(args.url, 120)}`,
@@ -241,17 +243,73 @@ export const readUrl: Tool = {
     },
 };
 
+// Web search through OpenRouter when there's no Tavily or Brave key: whoever
+// runs the server already added an OpenRouter key for the models, so search
+// works with nothing else to set up. Set at boot (boot.ts).
+export type SearchEndpoint = {baseUrl: string; apiKey: string; headers?: Record<string, string>; model: string};
+let openRouterSearch: () => SearchEndpoint | null = () => null;
+export function useOpenRouterSearch(fn: () => SearchEndpoint | null): void {
+    openRouterSearch = fn;
+}
+
+type Result = {title: string; url: string; snippet: string};
+
+async function searchOpenRouter(ep: SearchEndpoint, query: string, signal: AbortSignal): Promise<Result[]> {
+    const res = await fetch(`${ep.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${ep.apiKey}`, ...ep.headers},
+        body: JSON.stringify({
+            model: ep.model,
+            messages: [
+                {role: 'system', content: 'You search the web. List the most relevant pages for the query, one per line as: Title | URL | one-sentence summary. Use only pages the search returned.'},
+                {role: 'user', content: query},
+            ],
+            // OpenRouter's web search: the server tool, and the plugin for providers that still use it.
+            tools: [{type: 'openrouter:web_search', parameters: {max_results: 6}}],
+            plugins: [{id: 'web', max_results: 6}],
+            max_tokens: 900,
+            stream: false,
+        }),
+        signal,
+    });
+    if (!res.ok) {
+        throw new Error(`search answered ${res.status}`);
+    }
+    type Annotation = {type?: string; url?: string; title?: string; content?: string; url_citation?: {url?: string; title?: string; content?: string}};
+    const json = (await res.json()) as {choices?: {message?: {content?: string | null; annotations?: Annotation[]}}[]};
+    const message = json.choices?.[0]?.message;
+    const out = new Map<string, Result>();
+    for (const a of message?.annotations ?? []) {
+        const c = a.url_citation ?? a;
+        if (c.url && /^https?:\/\//.test(c.url) && !out.has(c.url)) {
+            out.set(c.url, {title: c.title ?? '', url: c.url, snippet: c.content ?? ''});
+        }
+    }
+    // Pages listed in the answer that the annotations left out.
+    for (const line of (message?.content ?? '').split('\n')) {
+        const parts = line.split('|').map((x) => x.trim().replace(/^[-*\d.\s]+/, ''));
+        const url = parts.find((x) => /^https?:\/\/\S+$/.test(x));
+        if (url && !out.has(url)) {
+            out.set(url, {title: parts[0] === url ? '' : parts[0], url, snippet: parts.slice(parts.indexOf(url) + 1).join(' ')});
+        }
+    }
+    return [...out.values()].slice(0, 8);
+}
+
 export const webSearch: Tool = {
     name: 'web_search',
     description: 'Search the web for current information. Returns titles, links and snippets; use read_url to read a result in full.',
     parameters: {type: 'object', properties: {query: {type: 'string'}}, required: ['query']},
     external: false,
-    available: () => Boolean(config.tools.tavilyKey || config.tools.braveKey),
+    available: () => Boolean(config.tools.tavilyKey || config.tools.braveKey || openRouterSearch()),
     async run(tc, args) {
         const query = str(args.query, 300);
         const signal = AbortSignal.any([tc.signal, AbortSignal.timeout(20_000)]);
-        let results: {title: string; url: string; snippet: string}[] = [];
-        if (config.tools.tavilyKey) {
+        let results: Result[] = [];
+        const viaOpenRouter = !config.tools.tavilyKey && !config.tools.braveKey ? openRouterSearch() : null;
+        if (viaOpenRouter) {
+            results = await searchOpenRouter(viaOpenRouter, query, signal);
+        } else if (config.tools.tavilyKey) {
             const res = await fetch('https://api.tavily.com/search', {method: 'POST', headers: {'Content-Type': 'application/json', Authorization: `Bearer ${config.tools.tavilyKey}`}, body: JSON.stringify({query, max_results: 6}), signal});
             if (!res.ok) {
                 throw new Error(`search answered ${res.status}`);

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {after, before, describe, it} from 'node:test';
 
 import {blockedAddress, carriesData, checkUrl, linksIn} from '../src/agents/tools/web.js';
+import {config} from '../src/config.js';
 import {Catalog} from '../src/llm/catalog.js';
 
 import {client, expectStatus, fakeProvider, type FakeRequest, lastUserText, model, signup, socket, startServer, type TestServer, waitFor} from './helpers.js';
@@ -83,12 +84,24 @@ describe('security', () => {
         assert.match(posts.find((p) => p.userId === captain.userId)!.message, /salary bands: secretalpha/);
     });
 
-    it('a link nobody shared needs a person\'s approval', async () => {
+    it('with AGENTS_ASK_BEFORE_LINKS, a link nobody shared with data in it needs a person\'s approval', async () => {
+        config.tools.askBeforeLinks = true;
+        try {
+            const {post, run} = await ask(owner.api, generalId, '@researcher open the secret page');
+            assert.equal(run.status, 'waiting_approval');
+            const card = ((await owner.api.get(`/posts/${post.id}/thread`)) as Post[]).find((p) => p.type === 'decision')!;
+            assert.equal(card.props.decision.tool, 'read_url');
+            assert.match(card.props.decision.fields[0].value, /evil\.example/);
+        } finally {
+            config.tools.askBeforeLinks = false;
+        }
+    });
+
+    it('by default agents open pages without asking (private addresses are still refused)', async () => {
         const {post, run} = await ask(owner.api, generalId, '@researcher open the secret page');
-        assert.equal(run.status, 'waiting_approval');
-        const card = ((await owner.api.get(`/posts/${post.id}/thread`)) as Post[]).find((p) => p.type === 'decision')!;
-        assert.equal(card.props.decision.tool, 'read_url');
-        assert.match(card.props.decision.fields[0].value, /evil\.example/);
+        assert.equal(run.status, 'succeeded');
+        const thread: Post[] = await owner.api.get(`/posts/${post.id}/thread`);
+        assert.ok(!thread.some((p) => p.type === 'decision'));
     });
 
     it('a shared link opens without asking, but private addresses are refused', async () => {

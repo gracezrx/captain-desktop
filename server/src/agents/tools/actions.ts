@@ -34,7 +34,7 @@ export const createDocument: Tool = {
 
 export const requestApproval: Tool = {
     name: 'request_approval',
-    description: 'Ask a person to approve something before you continue (spending money, publishing, contacting people outside the team, anything hard to undo). You will be told whether they approved.',
+    description: 'Ask a person to approve something before you continue (spending money, publishing, contacting people outside the team, anything hard to undo). Never for searching, opening pages or reading documents, which need no approval. You will be told whether they approved.',
     parameters: {
         type: 'object',
         properties: {

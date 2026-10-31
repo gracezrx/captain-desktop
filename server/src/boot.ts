@@ -8,6 +8,7 @@ import path from 'node:path';
 import type {FastifyInstance} from 'fastify';
 
 import {Orchestrator} from './agents/orchestrator.js';
+import {useOpenRouterSearch} from './agents/tools/web.js';
 import {registerTriggers} from './agents/triggers.js';
 import {authenticate} from './app/auth.js';
 import {type Ctx, createCtx} from './app/context.js';
@@ -91,6 +92,13 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
         void deleteExpiredSessions(sql).catch(() => undefined);
         void jobs.cleanup().catch(() => undefined);
     }, 3_600_000);
+
+    // Web search with the OpenRouter key when there's no search key of its own.
+    const searchModel = router.catalog.models.filter((m) => m.tier === 'easy').flatMap((m) => m.routes).find(([p]) => p === 'openrouter')?.[1] ?? 'openai/gpt-4o-mini';
+    useOpenRouterSearch(() => {
+        const ep = router.catalog.endpoint('openrouter');
+        return ep ? {...ep, model: searchModel} : null;
+    });
 
     if (router.demoMode) {
         log.warn('no model key yet: agents answer in demo mode. The first person to sign up can paste an OpenRouter key in Settings → Models & spend, or set OPENROUTER_API_KEY.');
