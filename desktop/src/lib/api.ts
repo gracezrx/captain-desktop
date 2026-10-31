@@ -3,7 +3,7 @@
 // the app's settings folder on the Mac, and in local storage on the web.
 
 import {isExtension, isTauri, LOCAL_SERVER, secretDelete, secretGet, secretSet} from './native';
-import type {Agent, AgentTool, Channel, ChannelMember, Dashboard, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
+import type {Agent, AgentTool, Channel, ChannelMember, Connections, Dashboard, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
 
 export type StoredSession = {serverUrl: string; token: string; userId: string};
 
@@ -231,6 +231,12 @@ export const api = {
     providers: () => get<ProviderKeyInfo[]>('/admin/providers'),
     saveProviderKey: (id: string, apiKey: string, baseUrl?: string) => put<{provider: ProviderKeyInfo; check: ProviderCheck}>(`/admin/providers/${id}`, {apiKey, ...(baseUrl ? {baseUrl} : {})}),
     removeProviderKey: (id: string) => del(`/admin/providers/${id}`),
+    // Google apps through Composio (Settings → Connections).
+    connections: (wsId: string) => get<Connections>(`/workspaces/${wsId}/connections`),
+    connectApp: (wsId: string, toolkit: string) => post<{url: string}>(`/workspaces/${wsId}/connections/${toolkit}`),
+    disconnectApp: (wsId: string, toolkit: string) => del(`/workspaces/${wsId}/connections/${toolkit}`),
+    saveConnectorKey: (apiKey: string) => put('/admin/connector-key', {apiKey}),
+    removeConnectorKey: () => del('/admin/connector-key'),
     checkProvider: (id: string) => post<ProviderCheck>(`/admin/providers/${id}/check`),
     usage: (wsId: string) => get<UsageSummary>(`/workspaces/${wsId}/usage`),
     // tz: minutes behind UTC, so "today" and the daily chart follow your clock.

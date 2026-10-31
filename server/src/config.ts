@@ -119,6 +119,12 @@ export const config = {
         concurrency: int('WORKER_CONCURRENCY', 4),
         leaseSeconds: int('JOB_LEASE_SECONDS', 90),
     },
+    connectors: {
+        // Google apps through Composio (as in Captain's main web product). The
+        // key can also be pasted in Settings → Connections by a server admin.
+        composioKey: env('COMPOSIO_API_KEY'),
+        composioBaseUrl: env('COMPOSIO_BASE_URL', 'https://backend.composio.dev/api/v3').replace(/\/+$/, ''),
+    },
     tools: {
         tavilyKey: env('TAVILY_API_KEY'),
         braveKey: env('BRAVE_SEARCH_API_KEY'),

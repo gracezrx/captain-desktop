@@ -13,6 +13,8 @@ import {ZodError} from 'zod';
 
 import type {Orchestrator} from './agents/orchestrator.js';
 import {adminRoutes} from './api/admin.js';
+import {connectionRoutes} from './api/connections.js';
+import {donePage} from './app/connections.js';
 import {authRoutes} from './api/auth.js';
 import {chatRoutes} from './api/chat.js';
 import {RateLimiter} from './api/ratelimit.js';
@@ -140,6 +142,7 @@ export async function buildServer(api: Api): Promise<FastifyInstance> {
         workspaceRoutes(v1, api);
         chatRoutes(v1, api);
         adminRoutes(v1, api);
+        connectionRoutes(v1, api);
 
         v1.get('/websocket', {websocket: true, config: {public: true}}, (socket) => {
             ctx.hub.accept(socket);
@@ -147,6 +150,8 @@ export async function buildServer(api: Api): Promise<FastifyInstance> {
     }, {prefix: '/api/v1'});
 
     app.get('/healthz', async () => ({ok: true}));
+    // Where Composio's Google sign-in comes back to (a plain page; see app/connections.ts).
+    app.get('/connections/done', async (req, reply) => reply.type('text/html').header('Cache-Control', 'no-store').send(donePage(req.query as Record<string, unknown>)));
     app.get('/readyz', async (_req, reply) => {
         try {
             await ctx.sql`select 1`;

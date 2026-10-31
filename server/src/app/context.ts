@@ -1,6 +1,7 @@
 import type {Sql} from '../db/index.js';
 import type {Storage} from '../files/storage.js';
 import type {JobQueue} from '../jobs/queue.js';
+import {Composio} from '../connectors/composio.js';
 import type {KeyStore} from '../llm/keys.js';
 import type {Router} from '../llm/router.js';
 import type {Hub} from '../realtime/hub.js';
@@ -16,9 +17,10 @@ export type Ctx = {
     jobs: JobQueue;
     router: Router;
     keys: KeyStore;
+    composio: Composio;
     hooks: Hooks;
 };
 
-export function createCtx(parts: Omit<Ctx, 'hooks'>): Ctx {
-    return {...parts, hooks: new Hooks()};
+export function createCtx(parts: Omit<Ctx, 'hooks' | 'composio'>): Ctx {
+    return {...parts, composio: new Composio(parts.keys), hooks: new Hooks()};
 }

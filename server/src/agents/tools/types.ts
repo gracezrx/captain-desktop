@@ -33,6 +33,8 @@ export type Tool = {
     run: (tc: ToolContext, args: Record<string, unknown>) => Promise<ToolResult>;
     // How the approval card describes this call.
     describe?: (args: Record<string, unknown>) => ApprovalText;
+    // What the agent's message says while it runs ("Looking in Gmail").
+    activity?: (args: Record<string, unknown>) => string;
 };
 
 export function str(v: unknown, max = 4000): string {

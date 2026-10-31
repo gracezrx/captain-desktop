@@ -1,18 +1,18 @@
 // Workspace settings: your profile, people and invites, agents, models and spend.
 
-import {AlertTriangle, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Laptop, Plus, Users, UserRound} from 'lucide-react';
+import {AlertTriangle, Bot, Check, ChevronDown, Copy, Cpu, ExternalLink, KeyRound, Laptop, Plug, Plus, Users, UserRound} from 'lucide-react';
 import {useEffect, useMemo, useState} from 'react';
 
 import {Avatar, PORTRAITS, portraitSrc} from '../components/Avatar';
 import {FieldLabel, ghostBtn, input, Modal, primaryBtn} from '../components/Modal';
 import {ShortcutRow} from '../components/ShortcutRow';
 import {api, errorMessage} from '../lib/api';
-import {isTauri, localServerRestart, localServerStatus, type LocalServerStatus, setTalkButtonVisible, shortcutsGet, type ShortcutStatus, talkButtonVisible} from '../lib/native';
+import {isTauri, localServerRestart, openExternal, localServerStatus, type LocalServerStatus, setTalkButtonVisible, shortcutsGet, type ShortcutStatus, talkButtonVisible} from '../lib/native';
 import {openSetup} from '../lib/setup';
 import {displayName, modelLabel, useStore} from '../lib/store';
-import type {Agent, AgentTool, ModelInfo, ProviderCheck, ProviderKeyInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
+import type {Agent, AgentTool, ConnectionApp, Connections, ModelInfo, ProviderCheck, ProviderKeyInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
 
-type Tab = 'profile' | 'people' | 'agents' | 'models' | 'mac';
+type Tab = 'profile' | 'people' | 'agents' | 'connections' | 'models' | 'mac';
 
 export function Settings({onClose, initial = 'people'}: {onClose: () => void; initial?: Tab}) {
     const ws = useStore((s) => s.workspace)!;
@@ -21,6 +21,7 @@ export function Settings({onClose, initial = 'people'}: {onClose: () => void; in
     const tabs: [Tab, string, React.ReactNode][] = [
         ['people', 'People', <Users key='p' size={15}/>],
         ['agents', 'Agents', <Bot key='a' size={15}/>],
+        ['connections', 'Connections', <Plug key='c' size={15}/>],
         ['models', 'Models & spend', <Cpu key='m' size={15}/>],
         ['profile', 'Your profile', <UserRound key='u' size={15}/>],
         ...(isTauri ? [['mac', 'This Mac', <Laptop key='l' size={15}/>] as [Tab, string, React.ReactNode]] : []),
@@ -38,6 +39,7 @@ export function Settings({onClose, initial = 'people'}: {onClose: () => void; in
                 <div className='min-h-[440px] min-w-0 flex-1'>
                     {tab === 'people' && <People admin={admin}/>}
                     {tab === 'agents' && <Agents admin={admin}/>}
+                    {tab === 'connections' && <ConnectionsTab/>}
                     {tab === 'models' && <Models admin={admin}/>}
                     {tab === 'profile' && <Profile/>}
                     {tab === 'mac' && <ThisMacSettings/>}
@@ -626,6 +628,185 @@ function ProviderRow({p, open = false, onChanged, result, onResult: setResult}: 
             )}
             {error && <p className='mt-2 text-[12px] text-alert'>{error}</p>}
         </div>
+    );
+}
+
+// ------------------------------------------------------------ connections
+
+const APP_ICONS: Record<string, string> = {gmail: '✉️', googledrive: '📁', googledocs: '📄', googlesheets: '📊', googlecalendar: '📅', googleslides: '📽️'};
+
+// Your Google apps, connected through Composio (as in Captain on the web).
+function ConnectionsTab() {
+    const ws = useStore((s) => s.workspace)!;
+    const [data, setData] = useState<Connections | null>(null);
+    const [busy, setBusy] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [waiting, setWaiting] = useState<string | null>(null); // the app whose sign-in page is open
+
+    const load = useMemo(() => () => api.connections(ws.id).then((d) => {
+        setData(d);
+        return d;
+    }).catch((e) => {
+        setError(errorMessage(e));
+        return null;
+    }), [ws.id]);
+
+    useEffect(() => {
+        void load();
+        // Back from the sign-in page in the browser: check again.
+        const onFocus = () => void load();
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+    }, [load]);
+
+    // While a sign-in page is open, look every few seconds for up to three minutes.
+    useEffect(() => {
+        if (!waiting) {
+            return undefined;
+        }
+        const until = Date.now() + 180_000;
+        const timer = window.setInterval(() => {
+            void load().then((d) => {
+                const app = d?.apps.find((a) => a.toolkit === waiting);
+                if (app?.status === 'connected' || Date.now() > until) {
+                    setWaiting(null);
+                }
+            });
+        }, 3000);
+        return () => window.clearInterval(timer);
+    }, [waiting, load]);
+
+    const connect = async (a: ConnectionApp) => {
+        setBusy(a.toolkit);
+        setError(null);
+        try {
+            const {url} = await api.connectApp(ws.id, a.toolkit);
+            await openExternal(url);
+            setWaiting(a.toolkit);
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+    const disconnect = async (a: ConnectionApp) => {
+        setBusy(a.toolkit);
+        setError(null);
+        try {
+            await api.disconnectApp(ws.id, a.toolkit);
+            await load();
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+
+    if (!data) {
+        return error ? <p className='text-[12.5px] text-alert'>{error}</p> : <p className='text-[13px] text-muted'>Loading…</p>;
+    }
+    return (
+        <div className='space-y-6'>
+            <section>
+                <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Google apps</h3>
+                <p className='mb-3 text-[12.5px] text-muted'>Connect your own Google account, app by app. Agents working for you can then read your email, files and calendar without asking; sending an email, adding an event or creating a doc still waits for your OK. Only you can use your connections, in this workspace.</p>
+                {!data.configured && (
+                    <p className='mb-3 rounded-xl bg-gold-tint px-3 py-2 text-[12.5px] text-gold-text'>
+                        {data.canSetUp ? 'First add a Composio key below: Captain connects to Google through Composio.' : 'Connections aren\'t set up on this server yet. Ask the person who runs it to add a Composio key.'}
+                    </p>
+                )}
+                {data.error && <p className='mb-3 text-[12.5px] text-alert'>{data.error}</p>}
+                <div className='space-y-1.5'>
+                    {data.apps.map((a) => (
+                        <div key={a.toolkit} className='flex items-center gap-3 rounded-xl bg-bg-subtle px-3 py-2.5 ring-1 ring-line/70'>
+                            <span className='grid size-8 shrink-0 place-items-center rounded-lg bg-surface text-[16px] ring-1 ring-line' aria-hidden>{APP_ICONS[a.toolkit] ?? '🔗'}</span>
+                            <span className='min-w-0 flex-1'>
+                                <span className='block text-[13px] font-bold text-ink'>{a.name}</span>
+                                <span className='block text-[12px] text-muted'>
+                                    {a.status === 'connected' ? <span className='inline-flex items-center gap-1.5'><span className='size-1.5 rounded-full bg-emerald-500'/>Connected</span> :
+                                        waiting === a.toolkit ? 'Finish signing in in your browser…' :
+                                            a.status === 'pending' ? 'Sign-in not finished' :
+                                                a.status === 'expired' ? <span className='text-alert'>Needs signing in again</span> : 'Not connected'}
+                                </span>
+                            </span>
+                            {a.status === 'connected' ? (
+                                <button type='button' className={ghostBtn} disabled={busy !== null} onClick={() => void disconnect(a)}>{busy === a.toolkit ? 'One moment…' : 'Disconnect'}</button>
+                            ) : (
+                                <button type='button' className={primaryBtn} disabled={busy !== null || !data.configured} onClick={() => void connect(a)}>
+                                    {busy === a.toolkit ? 'Opening…' : a.status === 'expired' || a.status === 'pending' ? 'Sign in again' : 'Connect'}
+                                </button>
+                            )}
+                        </div>
+                    ))}
+                </div>
+                {error && <p className='mt-2 text-[12.5px] text-alert'>{error}</p>}
+            </section>
+            {data.canSetUp && <ComposioKey data={data} onChanged={() => void load()}/>}
+        </div>
+    );
+}
+
+function ComposioKey({data, onChanged}: {data: Connections; onChanged: () => void}) {
+    const [editing, setEditing] = useState(!data.configured);
+    const [key, setKey] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const save = async () => {
+        setBusy(true);
+        setError(null);
+        try {
+            await api.saveConnectorKey(key.trim());
+            setKey('');
+            setEditing(false);
+            onChanged();
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+    const remove = async () => {
+        setBusy(true);
+        setError(null);
+        try {
+            await api.removeConnectorKey();
+            setEditing(true);
+            onChanged();
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+    const source = data.key?.source;
+    return (
+        <section>
+            <h3 className='mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-ink'><KeyRound size={14}/> Composio key</h3>
+            <p className='mb-2 text-[12.5px] text-muted'>Only people who run this server see this. One key from your Composio project (composio.dev → Settings → API keys) lets everyone here connect their own Google apps. It's stored encrypted, like the model keys.</p>
+            <div className='rounded-xl bg-bg-subtle px-3 py-2.5 ring-1 ring-line/70'>
+                <div className='flex items-center gap-2 text-[12.5px]'>
+                    {source ? <span className='inline-flex items-center gap-1.5 text-ink'><span className='size-1.5 rounded-full bg-emerald-500'/>{source === 'settings' ? 'In use' : 'From the server\'s environment'} · ends in {data.key?.last4}</span> : <span className='text-muted'>Not set</span>}
+                    {!editing && (
+                        <span className='ml-auto flex gap-1.5'>
+                            <button type='button' className={ghostBtn} onClick={() => setEditing(true)}>Replace key</button>
+                            {source === 'settings' && <button type='button' className={ghostBtn} disabled={busy} onClick={() => void remove()}>Remove</button>}
+                        </span>
+                    )}
+                </div>
+                {editing && (
+                    <form className='mt-2 flex gap-2' onSubmit={(e) => {
+                        e.preventDefault();
+                        void save();
+                    }}>
+                        <input className={input} type='password' value={key} onChange={(e) => setKey(e.target.value)} placeholder='Composio API key' autoComplete='off' spellCheck={false}/>
+                        <button type='submit' className={primaryBtn} disabled={busy || key.trim().length < 8}>{busy ? 'Checking…' : 'Save'}</button>
+                        {source && <button type='button' className={ghostBtn} onClick={() => setEditing(false)}>Cancel</button>}
+                    </form>
+                )}
+                {error && <p className='mt-2 text-[12.5px] text-alert'>{error}</p>}
+            </div>
+            <button type='button' onClick={() => void openExternal('https://platform.composio.dev')} className='mt-2 inline-flex items-center gap-1 text-[12px] font-semibold text-accent-text hover:underline'>Open Composio <ExternalLink size={12}/></button>
+        </section>
     );
 }
 

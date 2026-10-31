@@ -281,3 +281,19 @@ export type ClientMessage =
     | {action: 'ping'; seq: number};
 
 export type ApiError = {error: string; message: string; status: number};
+
+// Settings → Connections: your Google apps (through Composio), per workspace.
+export type ConnectionApp = {
+    toolkit: string; // gmail, googledrive, googledocs, googlesheets, googlecalendar, googleslides
+    name: string;
+    status: 'connected' | 'pending' | 'expired' | 'not_connected';
+    writes: boolean; // has actions that send or change something (they ask first)
+};
+
+export type Connections = {
+    configured: boolean; // the server has a Composio key
+    canSetUp: boolean; // you run the server, so you can add or change the key
+    key: {source: 'settings' | 'environment' | null; last4: string | null} | null; // for server admins
+    apps: ConnectionApp[];
+    error: string | null; // Composio couldn't be reached just now
+};

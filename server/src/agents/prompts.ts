@@ -37,6 +37,9 @@ export function agentSystem(agent: AgentRow, s: Setting, toolNames: string[]): s
             lines.push('Sending or publishing anything outside the workspace always waits for a person to approve it.');
         }
         lines.push('Searching the web, opening pages and reading documents or the workspace never need anyone\'s permission: just do it, without asking.');
+        if (s.channel.type !== 'D') {
+            lines.push(`If you read ${s.requesterName}'s email, files or calendar, share only what the request needs: everyone in this chat can read your reply.`);
+        }
     }
     return lines.join('\n');
 }

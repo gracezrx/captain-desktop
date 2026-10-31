@@ -20,6 +20,8 @@ import {AppError} from '../util/errors.js';
 import {log} from '../util/log.js';
 
 import {withoutImageData} from './history.js';
+import {connectorTools} from '../connectors/tools.js';
+
 import {getTool, toolDefs, toolsFor} from './tools/index.js';
 import {linksIn} from './tools/web.js';
 import type {Tool, ToolContext} from './tools/types.js';
@@ -90,8 +92,12 @@ export function friendlyError(e: unknown): string {
 export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
     const {ctx, run, agent, agentUser, channel, requester} = input;
     const state: StepState = {messages: [...input.state.messages], pending: [...input.state.pending], fileIds: [...input.state.fileIds]};
-    const tools = input.useTools ? toolsFor(agent) : [];
+    // Its own tools, plus the Google apps the person it works for connected.
+    const google = input.useTools ? await connectorTools(ctx, requester, channel.workspaceId) : [];
+    const tools = [...(input.useTools ? toolsFor(agent) : []), ...google];
     const allowed = new Set(tools.map((t) => t.name));
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    const lookup = (name: string): Tool | undefined => byName.get(name) ?? getTool(name);
     let costUsd = 0;
     let model: ModelAttribution | null = null;
 
@@ -221,7 +227,7 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
     const processPending = async (): Promise<ApprovalRow | null> => {
         while (state.pending.length) {
             const call = state.pending.shift()!;
-            const tool = getTool(call.function.name);
+            const tool = lookup(call.function.name);
             let args: Record<string, unknown> = {};
             try {
                 args = JSON.parse(call.function.arguments || '{}');
@@ -236,7 +242,7 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
             if (tool.external || tool.needsApproval?.(toolContext(), args)) {
                 return askApproval(tool, call, args);
             }
-            stream(`_${(ACTIVITY[tool.name] ?? (() => `Using ${tool.name}`))(args)}…_`);
+            stream(`_${(ACTIVITY[tool.name] ?? tool.activity ?? (() => `Using ${tool.name}`))(args)}…_`);
             state.messages.push({role: 'tool', tool_call_id: call.id, content: await runTool(tool, args)});
         }
         return null;
@@ -260,7 +266,7 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
 
         if (input.resume) {
             const a = input.resume;
-            const tool = getTool(a.tool);
+            const tool = lookup(a.tool);
             const call: ToolCall = {id: a.toolCallId ?? `call_${a.id}`, type: 'function', function: {name: a.tool, arguments: JSON.stringify(a.args)}};
             let content: string;
             if (a.status === 'approved' && tool) {

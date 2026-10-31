@@ -425,8 +425,17 @@ export function unreadCount(channel: Channel, member: ChannelMember | undefined)
     return member ? Math.max(0, channel.totalMsgCount - member.msgCount) : 0;
 }
 
+// Actions on someone's own Google account (gmail_send_email…) are theirs alone to decide.
+const OWN_ACCOUNT = /^(gmail|googledrive|googledocs|googlesheets|googlecalendar|googleslides)_/;
+
 export function canDecide(card: DecisionCard, me: User | null, workspace: Workspace | null): boolean {
-    return Boolean(me && (card.requestedBy === me.id || workspace?.role === 'owner' || workspace?.role === 'admin'));
+    if (!me) {
+        return false;
+    }
+    if (card.requestedBy === me.id) {
+        return true;
+    }
+    return !OWN_ACCOUNT.test(card.tool ?? '') && (workspace?.role === 'owner' || workspace?.role === 'admin');
 }
 
 // What needs you: decisions you can make, mentions and unread DMs, newest first.

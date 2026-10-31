@@ -35,6 +35,8 @@ import {now} from '../util/ids.js';
 import {log} from '../util/log.js';
 
 import {attachmentsFor, conversation, withoutImageData} from './history.js';
+import {onOwnAccount} from '../connectors/composio.js';
+
 import {makePlan} from './planner.js';
 import {agentSystem, type Setting, stepSystem, synthesisSystem} from './prompts.js';
 import {CancelledError, friendlyError, runAgent, type RunnerOutcome, type StepState} from './runner.js';
@@ -419,6 +421,9 @@ export class Orchestrator {
             throw notFound('Approval');
         }
         if (approval.requestedBy !== a.user.id) {
+            if (onOwnAccount(approval.tool)) {
+                throw forbidden('Only the person who asked can decide this: it uses their own account.');
+            }
             const role = await getMemberRole(this.ctx.sql, approval.workspaceId, a.user.id);
             if (!role || !atLeast(role, 'admin')) {
                 throw forbidden('Only the person who asked, or a workspace admin, can decide this.');
