@@ -218,6 +218,9 @@ export function plain(text: string): string {
         replace(/(^|\s)[*_]([^*_\s][^*_\n]*?)[*_](?=\s|$|[.,!?;:])/g, '$1$2').
         replace(/`/g, '').
         replace(/^\s*(#{1,6}|>|[-*•]|\d+[.)])\s+/gm, '').
+        // A table: its rule row goes, and each row reads as "a, b, c."
+        replace(/^[ \t]*\|?[ \t]*:?-{2,}:?[ \t]*(\|[ \t]*:?-{2,}:?[ \t]*)*\|?[ \t]*$/gm, '').
+        replace(/^[ \t]*\|(.*)\|[ \t]*$/gm, (_, row: string) => `${row.split('|').map((c) => c.trim()).filter(Boolean).join(', ')}.`).
         replace(/\|/g, ' ').
         replace(/\s+/g, ' ').
         trim();

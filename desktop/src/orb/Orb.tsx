@@ -923,7 +923,7 @@ function SentCard({task, directory}: {task: Task; directory: OrbDirectory}) {
     const lead = directory.agents.find((a) => a.name === task.lead);
     const subtitle = task.team.length > 1 ?
         `Captain is coordinating ${joinNames(task.team.map((h) => `@${h}`))}` :
-        task.lead === 'Captain' ? (task.steps.length ? `Captain split it into ${task.steps.length} steps` : 'Captain is working out who helps') : `${task.lead} is on it`;
+        task.lead === 'Captain' ? (task.steps.length > 1 ? `Captain split it into ${task.steps.length} steps` : task.steps.length ? 'Captain is on it' : 'Captain is working out who helps') : `${task.lead} is on it`;
     return (
         <div className='fc-card' style={{width: 420}}>
             <div style={{display: 'flex', alignItems: 'flex-start', gap: 12}}>
