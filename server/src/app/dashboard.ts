@@ -1,14 +1,14 @@
 // The Home dashboard: what agents are working on, what finished, what's
 // waiting on you, and (for owners and admins) tokens burned.
 
-import type {ActivityRun, Dashboard} from '../shared/types.js';
-import {activeRuns, localDayStart, recentRuns, runCounts, tokensByRun, usageOverview} from '../store/dashboard.js';
+import type {ActivityRun, ChannelUsage, Dashboard} from '../shared/types.js';
+import {activeRuns, channelUsage, localDayStart, recentRuns, runCounts, tokensByRun, usageOverview} from '../store/dashboard.js';
 import {listSteps, type RunRow, toRun} from '../store/runs.js';
 import type {UserRow} from '../store/users.js';
 import {getWorkspace} from '../store/workspaces.js';
 
 import type {Ctx} from './context.js';
-import {atLeast, requireWorkspaceRole} from './permissions.js';
+import {atLeast, requireChannelMember, requireWorkspaceRole} from './permissions.js';
 
 const DAY = 86_400_000;
 
@@ -47,4 +47,11 @@ export async function dashboard(ctx: Ctx, user: UserRow, workspaceId: string, of
         };
     };
     return {active: active.map(shape), recent: recent.map(shape), counts, usage};
+}
+
+// A chat's token use, for anyone in the chat.
+export async function chatUsage(ctx: Ctx, user: UserRow, channelId: string, offsetMin: number): Promise<ChannelUsage> {
+    const {channel} = await requireChannelMember(ctx.sql, channelId, user.id);
+    const role = await requireWorkspaceRole(ctx.sql, channel.workspaceId, user.id);
+    return channelUsage(ctx.sql, channelId, offsetMin, atLeast(role, 'admin'));
 }

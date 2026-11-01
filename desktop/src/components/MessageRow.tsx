@@ -1,5 +1,5 @@
 import {MessageSquareReply, SmilePlus, Trash2} from 'lucide-react';
-import {useMemo, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 
 import {api, errorMessage} from '../lib/api';
 import {timeOfDay} from '../lib/format';
@@ -7,6 +7,7 @@ import {agentForUser, displayName, modelLabel, useStore} from '../lib/store';
 import type {ClientPost, Post} from '../lib/types';
 
 import {Avatar} from './Avatar';
+import {Crew, CREW_MORE, CREW_QUICK, crewId, type CrewId, crewName, ReactionGlyph} from './Crew';
 import {DecisionCard} from './DecisionCard';
 import {Files} from './Files';
 import {Markup} from './Markup';
@@ -23,8 +24,6 @@ type Props = {
     onOpenPost?: (postId: string) => void;
 };
 
-const QUICK = ['👍', '✅', '🎉', '👀'];
-
 export function MessageRow({post, grouped = false, compact = false, inThread = false, onOpenImage, onOpenThread, onOpenPost}: Props) {
     const user = useStore((s) => s.users[post.userId]);
     const me = useStore((s) => s.me);
@@ -33,6 +32,7 @@ export function MessageRow({post, grouped = false, compact = false, inThread = f
     const stream = useStore((s) => s.streams[post.id]);
     const workspace = useStore((s) => s.workspace);
     const [picker, setPicker] = useState(false);
+    const [popped, setPopped] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const mine = post.userId === me?.id;
     const isAgent = Boolean(user?.isBot);
@@ -44,11 +44,16 @@ export function MessageRow({post, grouped = false, compact = false, inThread = f
     const model = post.props.model;
     const canDelete = !post.pending && (mine || workspace?.role === 'owner' || workspace?.role === 'admin');
 
-    const toggle = async (emoji: string) => {
+    const reactions = useMemo(() => groupReactions(post.reactions), [post.reactions]);
+    const toggle = async (id: CrewId) => {
         setPicker(false);
-        const had = post.reactions.find((r) => r.emoji === emoji)?.userIds.includes(me?.id ?? '');
+        const had = reactions.find((r) => r.key === id)?.userIds.includes(me?.id ?? '');
+        if (!had) {
+            setPopped(id);
+            setTimeout(() => setPopped((p) => (p === id ? null : p)), 700);
+        }
         try {
-            await (had ? api.unreact(post.id, emoji) : api.react(post.id, emoji));
+            await (had ? api.unreact(post.id, id) : api.react(post.id, id));
         } catch (e) {
             setError(errorMessage(e));
         }
@@ -96,16 +101,9 @@ export function MessageRow({post, grouped = false, compact = false, inThread = f
                 {error && <div className='mt-1 text-[12px] text-alert'>{error}</div>}
                 <Files files={post.files} compact={compact} onOpenImage={onOpenImage}/>
 
-                {post.reactions.length > 0 && (
+                {reactions.length > 0 && (
                     <div className='mt-1 flex flex-wrap gap-1'>
-                        {post.reactions.map((r) => {
-                            const minePick = r.userIds.includes(me?.id ?? '');
-                            return (
-                                <button key={r.emoji} type='button' onClick={() => void toggle(r.emoji)} className={`inline-flex h-6 items-center gap-1 rounded-full px-2 text-[12px] ring-1 ${minePick ? 'bg-tint ring-accent/40' : 'bg-surface ring-line'}`}>
-                                    <span>{r.emoji}</span><span className='font-semibold text-muted'>{r.userIds.length}</span>
-                                </button>
-                            );
-                        })}
+                        {reactions.map((r) => <ReactionPill key={r.key} reaction={r} meId={me?.id} pop={popped === r.key} onToggle={(id) => void toggle(id)}/>)}
                     </div>
                 )}
 
@@ -122,11 +120,15 @@ export function MessageRow({post, grouped = false, compact = false, inThread = f
             </div>
 
             {!compact && !post.pending && (
-                <div className='absolute -top-3 right-1 hidden items-center gap-0.5 rounded-full bg-surface p-0.5 ring-1 ring-line group-hover:flex' style={{boxShadow: 'var(--shadow-control)'}}>
-                    {picker && QUICK.map((e) => (
-                        <button key={e} type='button' onClick={() => void toggle(e)} className='grid size-7 place-items-center rounded-full text-[14px] hover:bg-tint'>{e}</button>
+                <div className={`absolute -top-3 right-1 items-center gap-0.5 rounded-full bg-surface p-0.5 ring-1 ring-line group-hover:flex ${picker ? 'flex' : 'hidden'}`} style={{boxShadow: 'var(--shadow-control)'}}>
+                    {CREW_QUICK.map((id) => (
+                        <button key={id} type='button' aria-label={crewName(id)} title={crewName(id)} onClick={() => void toggle(id)} className='grid size-7 place-items-center rounded-full transition-transform hover:scale-110 hover:bg-tint'>
+                            <Crew id={id} size={20}/>
+                        </button>
                     ))}
-                    <button type='button' aria-label='React' title='React' onClick={() => setPicker((p) => !p)} className='grid size-7 place-items-center rounded-full text-muted hover:bg-tint hover:text-ink'><SmilePlus size={15}/></button>
+                    <span className='mx-0.5 h-4 w-px bg-line'/>
+                    <button type='button' aria-label='More reactions' title='More reactions' aria-expanded={picker} onClick={() => setPicker((p) => !p)} className='grid size-7 place-items-center rounded-full text-muted hover:bg-tint hover:text-ink'><SmilePlus size={15}/></button>
+                    {picker && <Picker onPick={(id) => void toggle(id)} onClose={() => setPicker(false)}/>}
                     {onOpenThread && !inThread && (
                         <button type='button' aria-label='Reply in thread' title='Reply in thread' onClick={() => onOpenThread(post.rootId ?? post.id)} className='grid size-7 place-items-center rounded-full text-muted hover:bg-tint hover:text-ink'><MessageSquareReply size={15}/></button>
                     )}
@@ -189,4 +191,81 @@ function ThreadSummary({post, onOpen}: {post: Post; onOpen: () => void}) {
 // Show avatar and name only when the author changes or after a pause.
 export function isGrouped(prev: Post | undefined, post: Post): boolean {
     return Boolean(prev && prev.userId === post.userId && post.createdAt - prev.createdAt < 5 * 60 * 1000 && !prev.type && !post.type && !post.props.step);
+}
+
+type Reaction = {key: string; emoji: string; userIds: string[]};
+
+// Reactions by Crew id (a Unicode one from before counts as its Crew id).
+function groupReactions(list: {emoji: string; userIds: string[]}[]): Reaction[] {
+    const out: Reaction[] = [];
+    for (const r of list) {
+        const key = crewId(r.emoji) ?? r.emoji;
+        const same = out.find((x) => x.key === key);
+        if (same) {
+            same.userIds = [...new Set([...same.userIds, ...r.userIds])];
+        } else {
+            out.push({key, emoji: r.emoji, userIds: [...r.userIds]});
+        }
+    }
+    return out;
+}
+
+// A reaction: the Crew emoji, then who. People are counted; an agent shows
+// its face instead of adding to the count.
+function ReactionPill({reaction: r, meId, pop, onToggle}: {reaction: Reaction; meId?: string; pop: boolean; onToggle: (id: CrewId) => void}) {
+    const users = useStore((s) => s.users);
+    const id = crewId(r.key);
+    const mine = Boolean(meId && r.userIds.includes(meId));
+    const bots = r.userIds.filter((u) => users[u]?.isBot);
+    const people = r.userIds.length - bots.length;
+    const names = r.userIds.map((u) => (u === meId ? 'You' : displayName(users[u]))).join(', ');
+    const label = `${names} reacted ${id ? crewName(id) : r.key}`;
+    return (
+        <button
+            type='button'
+            disabled={!id}
+            onClick={() => id && onToggle(id)}
+            title={label}
+            aria-label={label}
+            aria-pressed={mine}
+            className={`inline-flex h-6 items-center gap-1 rounded-full pr-2 pl-1.5 text-[12px] ring-1 transition-colors ${mine ? 'bg-tint ring-accent/40' : 'bg-surface ring-line hover:bg-tint'}`}
+        >
+            <ReactionGlyph emoji={r.key} size={16} pop={pop}/>
+            {people > 0 && <span className='font-semibold text-muted'>{people}</span>}
+            {bots.length > 0 && (
+                <span className='flex -space-x-1'>
+                    {bots.slice(0, 3).map((u) => <Avatar key={u} user={users[u]} size={14} className='ring-1 ring-[var(--surface)]'/>)}
+                </span>
+            )}
+        </button>
+    );
+}
+
+// The other twelve, in a little panel under the hover bar.
+function Picker({onPick, onClose}: {onPick: (id: CrewId) => void; onClose: () => void}) {
+    const ref = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const away = (e: MouseEvent) => {
+            if (ref.current && !ref.current.contains(e.target as Node)) {
+                onClose();
+            }
+        };
+        const esc = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+        document.addEventListener('mousedown', away);
+        document.addEventListener('keydown', esc);
+        ref.current?.querySelector('button')?.focus();
+        return () => {
+            document.removeEventListener('mousedown', away);
+            document.removeEventListener('keydown', esc);
+        };
+    }, [onClose]);
+    return (
+        <div ref={ref} role='menu' aria-label='More reactions' className='absolute top-9 right-0 z-30 grid grid-cols-6 gap-1 rounded-2xl bg-surface p-2 ring-1 ring-line' style={{boxShadow: 'var(--shadow-overlay)'}}>
+            {CREW_MORE.map((id) => (
+                <button key={id} type='button' role='menuitem' title={crewName(id)} aria-label={crewName(id)} onClick={() => onPick(id)} className='grid size-11 place-items-center rounded-xl transition-transform hover:scale-110 hover:bg-tint focus-visible:bg-tint'>
+                    <Crew id={id} size={32}/>
+                </button>
+            ))}
+        </div>
+    );
 }

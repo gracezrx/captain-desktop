@@ -85,6 +85,26 @@ describe('home dashboard', () => {
         assert.equal(mine.recent.some((r) => r.channelId === secret.id), false, 'not a task in a channel Mia isn\'t in');
     });
 
+    it('token use per chat: everyone in the chat sees tokens, only admins see dollars', async () => {
+        const home = (await dash(owner.api)).usage as Dashboard['usage'] & {byChat: {channelId: string; name: string; tokens: number; usd: number}[]};
+        const general = home.byChat.find((c) => c.channelId === generalId)!;
+        assert.ok(general.tokens >= 1500, 'the chat the work was for');
+        assert.ok(home.byChat.some((c) => c.name === 'Founders' && c.tokens > 0), 'admins see every chat on Home');
+
+        type ChatUsage = {month: {tokensIn: number; tokensOut: number; usd: number; calls: number}; byAgent: {agentId: string; tokens: number; usd: number}[]; showsUsd: boolean};
+        const forOwner: ChatUsage = await owner.api.get(`/channels/${generalId}/usage?tz=240`);
+        assert.equal(forOwner.month.tokensIn + forOwner.month.tokensOut, general.tokens);
+        assert.ok(forOwner.month.usd > 0);
+        assert.equal(forOwner.showsUsd, true);
+        const forMember: ChatUsage = await member.api.get(`/channels/${generalId}/usage?tz=240`);
+        assert.equal(forMember.month.tokensIn + forMember.month.tokensOut, general.tokens);
+        assert.equal(forMember.month.usd, 0);
+        assert.ok(forMember.byAgent.every((a) => a.usd === 0));
+        assert.equal(forMember.showsUsd, false);
+        const founders = home.byChat.find((c) => c.name === 'Founders')!;
+        await assert.rejects(member.api.get(`/channels/${founders.channelId}/usage`), 'not a chat Mia is in');
+    });
+
     it('ignores a nonsense time zone', async () => {
         const res = await owner.api.get(`/workspaces/${wsId}/dashboard?tz=banana`) as Dashboard;
         assert.equal(res.usage!.daily.at(-1)!.day, localDayStart(Date.now(), 0));

@@ -2,7 +2,7 @@
 // is in (the same rule as reading the runs in a channel).
 
 import type {Db} from '../db/index.js';
-import type {DashboardUsage, TokenTotals} from '../shared/types.js';
+import type {ChannelType, ChannelUsage, DashboardUsage, TokenTotals} from '../shared/types.js';
 
 import type {RunRow} from './runs.js';
 import {monthStart} from './usage.js';
@@ -73,7 +73,7 @@ export async function usageOverview(db: Db, workspaceId: string, budgetUsd: numb
     const from = Math.min(month, fortnight);
     const shift = offsetMin * 60_000;
     // Three independent queries, sent together: a hosted database is a round trip away.
-    const [[row], days, byAgent] = await Promise.all([db`
+    const [[row], days, byAgent, byChat] = await Promise.all([db`
         select
             coalesce(sum(tokens_in) filter (where created_at >= ${today}), 0)::bigint as today_in,
             coalesce(sum(tokens_out) filter (where created_at >= ${today}), 0)::bigint as today_out,
@@ -95,7 +95,11 @@ export async function usageOverview(db: Db, workspaceId: string, budgetUsd: numb
         group by d`, db`
         select agent_id, coalesce(sum(tokens_in + tokens_out), 0)::bigint as tokens, coalesce(sum(cost_usd), 0)::float8 as usd
         from usage_events where workspace_id = ${workspaceId} and created_at >= ${month}
-        group by agent_id order by tokens desc`]);
+        group by agent_id order by tokens desc`, db`
+        select u.channel_id, c.display_name, c.type, coalesce(sum(u.tokens_in + u.tokens_out), 0)::bigint as tokens, coalesce(sum(u.cost_usd), 0)::float8 as usd
+        from usage_events u join channels c on c.id = u.channel_id
+        where u.workspace_id = ${workspaceId} and u.created_at >= ${month}
+        group by u.channel_id, c.display_name, c.type order by tokens desc limit 12`]);
     const byDay = new Map(days.map((d) => [Number(d.d) * DAY + shift, {tokens: Number(d.tokens), usd: Number(d.usd)}]));
     return {
         today: totals(row, 'today'),
@@ -107,6 +111,43 @@ export async function usageOverview(db: Db, workspaceId: string, budgetUsd: numb
             return {day, ...(byDay.get(day) ?? {tokens: 0, usd: 0})};
         }),
         byAgent: byAgent.map((r) => ({agentId: (r.agentId as string) ?? null, tokens: Number(r.tokens), usd: Number(r.usd)})),
+        byChat: byChat.map((r) => ({channelId: r.channelId as string, name: (r.displayName as string) || '', type: r.type as ChannelType, tokens: Number(r.tokens), usd: Number(r.usd)})),
         errorsToday: Number(row.errorsToday),
+    };
+}
+
+// One chat's token use: today, the past week and this month, and by agent
+// this month. Dollars only for owners and admins.
+export async function channelUsage(db: Db, channelId: string, offsetMin: number, withUsd: boolean, at = Date.now()): Promise<ChannelUsage> {
+    const today = localDayStart(at, offsetMin);
+    const week = today - 6 * DAY;
+    const month = monthStart(at);
+    const from = Math.min(month, week);
+    const [[row], byAgent] = await Promise.all([db`
+        select
+            coalesce(sum(tokens_in) filter (where created_at >= ${today}), 0)::bigint as today_in,
+            coalesce(sum(tokens_out) filter (where created_at >= ${today}), 0)::bigint as today_out,
+            coalesce(sum(cost_usd) filter (where created_at >= ${today}), 0)::float8 as today_usd,
+            (count(*) filter (where created_at >= ${today}))::int as today_calls,
+            coalesce(sum(tokens_in) filter (where created_at >= ${week}), 0)::bigint as week_in,
+            coalesce(sum(tokens_out) filter (where created_at >= ${week}), 0)::bigint as week_out,
+            coalesce(sum(cost_usd) filter (where created_at >= ${week}), 0)::float8 as week_usd,
+            (count(*) filter (where created_at >= ${week}))::int as week_calls,
+            coalesce(sum(tokens_in) filter (where created_at >= ${month}), 0)::bigint as month_in,
+            coalesce(sum(tokens_out) filter (where created_at >= ${month}), 0)::bigint as month_out,
+            coalesce(sum(cost_usd) filter (where created_at >= ${month}), 0)::float8 as month_usd,
+            (count(*) filter (where created_at >= ${month}))::int as month_calls
+        from usage_events where channel_id = ${channelId} and created_at >= ${from}`, db`
+        select agent_id, coalesce(sum(tokens_in + tokens_out), 0)::bigint as tokens, coalesce(sum(cost_usd), 0)::float8 as usd
+        from usage_events where channel_id = ${channelId} and created_at >= ${month}
+        group by agent_id order by tokens desc`]);
+    const hide = (t: TokenTotals): TokenTotals => (withUsd ? t : {...t, usd: 0});
+    return {
+        channelId,
+        today: hide(totals(row, 'today')),
+        week: hide(totals(row, 'week')),
+        month: hide(totals(row, 'month')),
+        byAgent: byAgent.map((r) => ({agentId: (r.agentId as string) ?? null, tokens: Number(r.tokens), usd: withUsd ? Number(r.usd) : 0})),
+        showsUsd: withUsd,
     };
 }

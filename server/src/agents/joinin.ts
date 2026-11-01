@@ -95,7 +95,7 @@ export async function considerJoining(ctx: Ctx, postId: string): Promise<void> {
                 {role: 'system', content: joinInSystem(captain, agents.filter((a) => !a.isCoordinator), ws?.name ?? 'Captain')},
                 {role: 'user', content: `Group chat: ${channel.displayName}\n\n${transcript}`},
             ],
-            attribution: {agentId: captain.id, userId: post.userId},
+            attribution: {agentId: captain.id, userId: post.userId, channelId: channel.id},
         });
         yes = /^\W*yes\b/i.test(res.text);
     } catch (err) {

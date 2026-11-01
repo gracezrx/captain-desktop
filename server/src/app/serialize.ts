@@ -20,6 +20,7 @@ export function fileInfo(f: FileRow): FileInfo {
         width: f.width,
         height: f.height,
         url: `/api/v1/files/${f.id}/content?exp=${exp}&sig=${sign(f.id, exp)}`,
+        props: f.props ?? {},
     };
 }
 

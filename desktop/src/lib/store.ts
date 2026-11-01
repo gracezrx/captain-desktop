@@ -427,6 +427,17 @@ export function unreadCount(channel: Channel, member: ChannelMember | undefined)
 
 // Actions on someone's own Google account (gmail_send_email…) are theirs alone to decide.
 const OWN_ACCOUNT = /^(gmail|googledrive|googledocs|googlesheets|googlecalendar|googleslides)_/;
+const APP_NAMES: Record<string, string> = {gmail: 'Gmail', googledrive: 'Google Drive', googledocs: 'Google Docs', googlesheets: 'Google Sheets', googlecalendar: 'Google Calendar', googleslides: 'Google Slides'};
+
+// The app on the asker's own account a decision would act in, if any.
+export function ownAccountApp(tool: string | undefined): string | null {
+    const m = (tool ?? '').match(OWN_ACCOUNT);
+    if (m) {
+        return APP_NAMES[m[1]];
+    }
+    const mcp = (tool ?? '').match(/^mcp_([a-z0-9_]+?)_/);
+    return mcp ? `${mcp[1].charAt(0).toUpperCase()}${mcp[1].slice(1)} connection` : null;
+}
 
 export function canDecide(card: DecisionCard, me: User | null, workspace: Workspace | null): boolean {
     if (!me) {
@@ -435,7 +446,7 @@ export function canDecide(card: DecisionCard, me: User | null, workspace: Worksp
     if (card.requestedBy === me.id) {
         return true;
     }
-    return !OWN_ACCOUNT.test(card.tool ?? '') && (workspace?.role === 'owner' || workspace?.role === 'admin');
+    return !ownAccountApp(card.tool) && (workspace?.role === 'owner' || workspace?.role === 'admin');
 }
 
 // What needs you: decisions you can make, mentions and unread DMs, newest first.

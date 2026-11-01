@@ -8,6 +8,7 @@ export type UsageEvent = {
     agentId: string | null;
     runId: string | null;
     stepId: string | null;
+    channelId?: string | null; // the chat the work was for
     modelId: string;
     provider: string;
     tier: Tier;
@@ -22,8 +23,8 @@ export type UsageEvent = {
 
 export async function recordUsage(db: Db, e: UsageEvent): Promise<void> {
     await db`
-        insert into usage_events (id, workspace_id, user_id, agent_id, run_id, step_id, model_id, provider, tier, purpose, tokens_in, tokens_out, cost_usd, latency_ms, ok, error, created_at)
-        values (${newId()}, ${e.workspaceId}, ${e.userId}, ${e.agentId}, ${e.runId}, ${e.stepId}, ${e.modelId}, ${e.provider}, ${e.tier}, ${e.purpose},
+        insert into usage_events (id, workspace_id, user_id, agent_id, run_id, step_id, channel_id, model_id, provider, tier, purpose, tokens_in, tokens_out, cost_usd, latency_ms, ok, error, created_at)
+        values (${newId()}, ${e.workspaceId}, ${e.userId}, ${e.agentId}, ${e.runId}, ${e.stepId}, ${e.channelId ?? null}, ${e.modelId}, ${e.provider}, ${e.tier}, ${e.purpose},
                 ${e.tokensIn}, ${e.tokensOut}, ${e.costUsd}, ${e.latencyMs}, ${e.ok}, ${e.error}, ${now()})`;
 }
 

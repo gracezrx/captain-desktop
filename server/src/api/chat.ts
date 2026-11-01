@@ -5,6 +5,7 @@ import {z} from 'zod';
 
 import {channelRuns} from '../app/agents.js';
 import * as channels from '../app/channels.js';
+import {chatUsage, parseOffset} from '../app/dashboard.js';
 import * as files from '../app/files.js';
 import * as posts from '../app/posts.js';
 import {badRequest} from '../util/errors.js';
@@ -56,6 +57,7 @@ export function chatRoutes(app: FastifyInstance, api: Api): void {
         return {ok: true};
     });
     app.get('/channels/:id/runs', async (req) => channelRuns(ctx, req.user, id(req)));
+    app.get('/channels/:id/usage', async (req) => chatUsage(ctx, req.user, id(req), parseOffset((req.query as {tz?: string}).tz)));
 
     // ---------------------------------------------------------- messages
     app.get('/channels/:id/posts', async (req) => {

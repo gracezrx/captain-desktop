@@ -10,7 +10,7 @@ import {api, errorMessage} from '../lib/api';
 import {isTauri, localServerRestart, openExternal, localServerStatus, type LocalServerStatus, setTalkButtonVisible, shortcutsGet, type ShortcutStatus, talkButtonVisible} from '../lib/native';
 import {openSetup} from '../lib/setup';
 import {displayName, modelLabel, useStore} from '../lib/store';
-import type {Agent, AgentTool, ConnectionApp, Connections, ModelInfo, ProviderCheck, ProviderKeyInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
+import type {Agent, AgentTool, ConnectionApp, Connections, McpConnections, McpServerInfo, ModelInfo, ProviderCheck, ProviderKeyInfo, Tier, UsageSummary, WorkspaceMember, WorkspaceRole} from '../lib/types';
 
 type Tab = 'profile' | 'people' | 'agents' | 'connections' | 'models' | 'mac';
 
@@ -709,7 +709,7 @@ function ConnectionsTab() {
         <div className='space-y-6'>
             <section>
                 <h3 className='mb-1 text-[13px] font-extrabold text-ink'>Google apps</h3>
-                <p className='mb-3 text-[12.5px] text-muted'>Connect your own Google account, app by app. Agents working for you can then read your email, files and calendar without asking; sending an email, adding an event or creating a doc still waits for your OK. Only you can use your connections, in this workspace.</p>
+                <p className='mb-3 text-[12.5px] text-muted'>Connect your own Google account, app by app. Agents working for you can then read your email, files and calendar without asking; sending an email or adding an event still waits for your OK. Docs, decks and sheets agents make for you also land in your Drive, in a Captain folder for each chat. Only you can use your connections, in this workspace.</p>
                 {!data.configured && (
                     <p className='mb-3 rounded-xl bg-gold-tint px-3 py-2 text-[12.5px] text-gold-text'>
                         {data.canSetUp ? 'First add a Composio key below: Captain connects to Google through Composio.' : 'Connections aren\'t set up on this server yet. Ask the person who runs it to add a Composio key.'}
@@ -741,8 +741,176 @@ function ConnectionsTab() {
                 </div>
                 {error && <p className='mt-2 text-[12.5px] text-alert'>{error}</p>}
             </section>
+            <McpServers/>
             {data.canSetUp && <ComposioKey data={data} onChanged={() => void load()}/>}
         </div>
+    );
+}
+
+// MCP servers: Granola, Notion and Linear in one click, or any remote MCP
+// server by its address. Each person connects their own.
+function McpServers() {
+    const ws = useStore((s) => s.workspace)!;
+    const [data, setData] = useState<McpConnections | null>(null);
+    const [busy, setBusy] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [waiting, setWaiting] = useState<string | null>(null); // a server whose sign-in page is open
+    const [adding, setAdding] = useState(false);
+    const [form, setForm] = useState({name: '', url: '', token: '', authHeader: ''});
+    const [open, setOpen] = useState<string | null>(null); // a server whose tools are shown
+
+    const load = useMemo(() => () => api.mcpServers(ws.id).then((d) => {
+        setData(d);
+        return d;
+    }).catch((e) => {
+        setError(errorMessage(e));
+        return null;
+    }), [ws.id]);
+    useEffect(() => {
+        void load();
+        const onFocus = () => void load();
+        window.addEventListener('focus', onFocus);
+        return () => window.removeEventListener('focus', onFocus);
+    }, [load]);
+    useEffect(() => {
+        if (!waiting) {
+            return undefined;
+        }
+        const until = Date.now() + 180_000;
+        const timer = window.setInterval(() => {
+            void load().then((d) => {
+                const s = d?.servers.find((x) => x.id === waiting);
+                if (s?.status === 'connected' || Date.now() > until) {
+                    setWaiting(null);
+                }
+            });
+        }, 3000);
+        return () => window.clearInterval(timer);
+    }, [waiting, load]);
+
+    const run = async (key: string, fn: () => Promise<void>) => {
+        setBusy(key);
+        setError(null);
+        try {
+            await fn();
+        } catch (e) {
+            setError(errorMessage(e));
+        } finally {
+            setBusy(null);
+        }
+    };
+    const add = (body: Parameters<typeof api.addMcp>[1], key: string) => run(key, async () => {
+        const res = await api.addMcp(ws.id, body);
+        if (res.signInUrl) {
+            await openExternal(res.signInUrl);
+            setWaiting(res.server.id);
+        } else if (res.server.status !== 'connected') {
+            setError(`${res.server.name}: ${res.server.lastError ?? 'it didn\'t answer properly.'}`);
+        }
+        setAdding(false);
+        setForm({name: '', url: '', token: '', authHeader: ''});
+        await load();
+    });
+    const signIn = (s: McpServerInfo) => run(s.id, async () => {
+        const {url} = await api.signInMcp(ws.id, s.id);
+        await openExternal(url);
+        setWaiting(s.id);
+    });
+
+    if (!data) {
+        return error ? <p className='text-[12.5px] text-alert'>{error}</p> : null;
+    }
+    const added = new Set(data.servers.map((s) => s.preset).filter(Boolean));
+    const offered = data.presets.filter((p) => !added.has(p.id));
+    return (
+        <section>
+            <h3 className='mb-1 text-[13px] font-extrabold text-ink'>MCP servers</h3>
+            <p className='mb-3 text-[12.5px] text-muted'>Connect apps that speak MCP with your own account. Agents working for you can then look things up there without asking; anything that changes something waits for your OK. Only you can use them, in this workspace.</p>
+            <div className='space-y-1.5'>
+                {data.servers.map((s) => {
+                    const reads = s.tools.filter((t) => t.reads).length;
+                    const changes = s.tools.length - reads;
+                    return (
+                        <div key={s.id} className='rounded-xl bg-bg-subtle px-3 py-2.5 ring-1 ring-line/70'>
+                            <div className='flex items-center gap-3'>
+                                <span className='grid size-8 shrink-0 place-items-center rounded-lg bg-surface text-[14px] font-extrabold text-accent-text ring-1 ring-line' aria-hidden>{s.name.slice(0, 1).toUpperCase()}</span>
+                                <span className='min-w-0 flex-1'>
+                                    <span className='block truncate text-[13px] font-bold text-ink'>{s.name} <span className='font-medium text-muted'>· {s.url.replace(/^https?:\/\//, '')}</span></span>
+                                    <span className='block text-[12px] text-muted'>
+                                        {waiting === s.id ? 'Finish signing in in your browser…' :
+                                            s.status === 'connected' ? (
+                                                <button type='button' onClick={() => setOpen(open === s.id ? null : s.id)} className='inline-flex items-center gap-1.5 hover:text-ink'>
+                                                    <span className={`size-1.5 rounded-full ${s.enabled ? 'bg-emerald-500' : 'bg-line'}`}/>
+                                                    {s.enabled ? 'Connected' : 'Switched off'} · {s.tools.length} tools{changes ? ` (${changes} ask first)` : ''}
+                                                </button>
+                                            ) :
+                                                s.status === 'needs_sign_in' ? <span className='text-gold-text'>Needs you to sign in</span> :
+                                                    <span className='text-alert'>{s.lastError ?? 'Not checked yet'}</span>}
+                                    </span>
+                                </span>
+                                {s.status === 'needs_sign_in' ? (
+                                    <button type='button' className={primaryBtn} disabled={busy !== null} onClick={() => void signIn(s)}>{busy === s.id ? 'Opening…' : 'Sign in'}</button>
+                                ) : s.status === 'connected' ? (
+                                    <button type='button' className={ghostBtn} disabled={busy !== null} onClick={() => void run(s.id, async () => {
+                                        await api.setMcpEnabled(ws.id, s.id, !s.enabled);
+                                        await load();
+                                    })}>{s.enabled ? 'Switch off' : 'Switch on'}</button>
+                                ) : (
+                                    <button type='button' className={ghostBtn} disabled={busy !== null} onClick={() => void run(s.id, async () => {
+                                        await api.verifyMcp(ws.id, s.id);
+                                        await load();
+                                    })}>{busy === s.id ? 'Checking…' : 'Check again'}</button>
+                                )}
+                                <button type='button' className={ghostBtn} disabled={busy !== null} onClick={() => void run(s.id, async () => {
+                                    await api.removeMcp(ws.id, s.id);
+                                    await load();
+                                })}>Remove</button>
+                            </div>
+                            {open === s.id && s.tools.length > 0 && (
+                                <div className='mt-2 flex flex-wrap gap-1 pl-11'>
+                                    {s.tools.map((t) => (
+                                        <span key={t.name} title={t.reads ? 'Runs without asking' : 'Asks you first'} className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${t.reads ? 'bg-tint text-accent-text' : 'bg-gold-tint text-gold-text'}`}>{t.name}</span>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+                {offered.map((p) => (
+                    <div key={p.id} className='flex items-center gap-3 rounded-xl bg-bg-subtle px-3 py-2.5 ring-1 ring-line/70'>
+                        <span className='grid size-8 shrink-0 place-items-center rounded-lg bg-surface text-[14px] font-extrabold text-accent-text ring-1 ring-line' aria-hidden>{p.name.slice(0, 1)}</span>
+                        <span className='min-w-0 flex-1'>
+                            <span className='block text-[13px] font-bold text-ink'>{p.name}</span>
+                            <span className='block text-[12px] text-muted'>{p.description}</span>
+                        </span>
+                        <button type='button' className={primaryBtn} disabled={busy !== null} onClick={() => void add({preset: p.id}, p.id)}>{busy === p.id ? 'Opening…' : 'Connect'}</button>
+                    </div>
+                ))}
+            </div>
+            {adding ? (
+                <form className='mt-2 space-y-2 rounded-xl bg-bg-subtle p-3 ring-1 ring-line/70' onSubmit={(e) => {
+                    e.preventDefault();
+                    void add({url: form.url.trim(), name: form.name.trim() || undefined, token: form.token.trim() || undefined, authHeader: form.authHeader.trim() || undefined}, 'custom');
+                }}>
+                    <div className='grid grid-cols-[1fr_2fr] gap-2'>
+                        <input className={input} value={form.name} onChange={(e) => setForm({...form, name: e.target.value})} placeholder='Name (optional)'/>
+                        <input className={input} value={form.url} onChange={(e) => setForm({...form, url: e.target.value})} placeholder='https://example.com/mcp' autoComplete='off' spellCheck={false} required/>
+                    </div>
+                    <div className='grid grid-cols-[2fr_1fr] gap-2'>
+                        <input className={input} type='password' value={form.token} onChange={(e) => setForm({...form, token: e.target.value})} placeholder='Token, if it uses one (leave empty to sign in)' autoComplete='off'/>
+                        <input className={input} value={form.authHeader} onChange={(e) => setForm({...form, authHeader: e.target.value})} placeholder='Header (optional)' autoComplete='off' spellCheck={false}/>
+                    </div>
+                    <p className='text-[11.5px] text-muted'>A token goes as a Bearer token unless you name another header (like X-Api-Key). Servers that use a sign-in open it in your browser.</p>
+                    <div className='flex gap-2'>
+                        <button type='submit' className={primaryBtn} disabled={busy !== null || !/^https?:\/\/\S+$/i.test(form.url.trim())}>{busy === 'custom' ? 'Connecting…' : 'Connect and check'}</button>
+                        <button type='button' className={ghostBtn} onClick={() => setAdding(false)}>Cancel</button>
+                    </div>
+                </form>
+            ) : (
+                <button type='button' onClick={() => setAdding(true)} className='mt-2 inline-flex items-center gap-1 text-[12.5px] font-semibold text-accent-text hover:underline'><Plus size={13}/> Add a server by its address</button>
+            )}
+            {error && <p className='mt-2 text-[12.5px] text-alert'>{error}</p>}
+        </section>
     );
 }
 

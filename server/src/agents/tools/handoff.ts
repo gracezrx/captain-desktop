@@ -38,14 +38,14 @@ export const askAgent: Tool = {
         const res = await tc.ctx.router.complete({
             workspaceId: tc.channel.workspaceId,
             purpose: 'step',
-            tier: await chooseTier(tc.ctx, tc.channel.workspaceId, target, request, 'step'),
+            tier: await chooseTier(tc.ctx, tc.channel.workspaceId, target, request, 'step', tc.channel.id),
             pinnedModel: target.model,
             messages: [
                 {role: 'system', content: agentSystem(target, {workspaceName: ws.name, channel: tc.channel, requesterName: tc.requester.displayName}, [])},
                 {role: 'user', content: `${tc.agent.name} (a teammate agent) asks: ${request}`},
             ],
             signal: tc.signal,
-            attribution: {userId: tc.requester.id, agentId: target.id, runId: tc.run.id, stepId: tc.stepId},
+            attribution: {userId: tc.requester.id, agentId: target.id, runId: tc.run.id, stepId: tc.stepId, channelId: tc.channel.id},
         });
         const answer = res.text.trim() || '(no answer)';
         if (tc.channel.deletedAt === null) {

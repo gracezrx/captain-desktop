@@ -14,7 +14,7 @@ import {classifierSystem} from './prompts.js';
 
 const PURPOSE_BASE: Record<Purpose, Tier> = {reply: 'easy', step: 'easy', plan: 'balanced', synthesis: 'balanced', classify: 'easy'};
 
-export async function chooseTier(ctx: Ctx, workspaceId: string, agent: AgentRow, text: string, purpose: Purpose): Promise<Tier> {
+export async function chooseTier(ctx: Ctx, workspaceId: string, agent: AgentRow, text: string, purpose: Purpose, channelId: string | null = null): Promise<Tier> {
     const base = agent.tier === 'auto' ? PURPOSE_BASE[purpose] : maxTier(agent.tier, PURPOSE_BASE[purpose]);
     let tier = classifyDifficulty(text, base);
     if (config.llm.llmClassifier && tier !== 'hard' && text.length > 200 && !ctx.router.demoMode) {
@@ -22,7 +22,7 @@ export async function chooseTier(ctx: Ctx, workspaceId: string, agent: AgentRow,
             const res = await ctx.router.complete({
                 workspaceId, purpose: 'classify', tier: 'easy', maxTokens: 4, temperature: 0,
                 messages: [{role: 'system', content: classifierSystem()}, {role: 'user', content: text.slice(0, 4000)}],
-                attribution: {agentId: agent.id},
+                attribution: {agentId: agent.id, channelId},
             });
             const word = res.text.trim().toLowerCase().replace(/[^a-z]/g, '') as Tier;
             if (TIERS.includes(word)) {

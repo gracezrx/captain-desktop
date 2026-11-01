@@ -29,7 +29,7 @@ export type RouteRequest = CallOptions & {
     tier: Tier;
     pinnedModel?: string | null;
     needVision?: boolean;
-    attribution?: {userId?: string | null; agentId?: string | null; runId?: string | null; stepId?: string | null};
+    attribution?: {userId?: string | null; agentId?: string | null; runId?: string | null; stepId?: string | null; channelId?: string | null};
 };
 
 export type RoutedResult = CallResult & {modelId: string; provider: string; tier: Tier; costUsd: number; demo: boolean};
@@ -308,7 +308,7 @@ export class Router {
     private async record(req: RouteRequest, modelId: string, provider: string, tokensIn: number, tokensOut: number, cost: number, latencyMs: number, ok: boolean, error: string | null): Promise<void> {
         const a = req.attribution ?? {};
         await recordUsage(this.sql, {
-            workspaceId: req.workspaceId, userId: a.userId ?? null, agentId: a.agentId ?? null, runId: a.runId ?? null, stepId: a.stepId ?? null,
+            workspaceId: req.workspaceId, userId: a.userId ?? null, agentId: a.agentId ?? null, runId: a.runId ?? null, stepId: a.stepId ?? null, channelId: a.channelId ?? null,
             modelId, provider, tier: req.tier, purpose: req.purpose, tokensIn, tokensOut, costUsd: cost, latencyMs, ok, error,
         }).catch((err) => log.error({err}, 'usage write failed'));
     }

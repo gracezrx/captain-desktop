@@ -15,6 +15,7 @@ import type {Orchestrator} from './agents/orchestrator.js';
 import {adminRoutes} from './api/admin.js';
 import {connectionRoutes} from './api/connections.js';
 import {donePage} from './app/connections.js';
+import {callbackPage} from './app/mcp.js';
 import {authRoutes} from './api/auth.js';
 import {chatRoutes} from './api/chat.js';
 import {RateLimiter} from './api/ratelimit.js';
@@ -152,6 +153,8 @@ export async function buildServer(api: Api): Promise<FastifyInstance> {
     app.get('/healthz', async () => ({ok: true}));
     // Where Composio's Google sign-in comes back to (a plain page; see app/connections.ts).
     app.get('/connections/done', async (req, reply) => reply.type('text/html').header('Cache-Control', 'no-store').send(donePage(req.query as Record<string, unknown>)));
+    // An MCP server's sign-in comes back here (the state in the link is the permission).
+    app.get('/mcp/oauth/callback', {config: {cost: 5}}, async (req, reply) => reply.type('text/html').header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer').send(await callbackPage(ctx, req.query as Record<string, unknown>)));
     app.get('/readyz', async (_req, reply) => {
         try {
             await ctx.sql`select 1`;

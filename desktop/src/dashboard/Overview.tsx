@@ -227,7 +227,7 @@ export function Overview({onInvite, onModels}: {onInvite: () => void; onModels: 
                     </Card>
                 </div>
 
-                {data?.usage && <Tokens usage={data.usage} agents={agents} onModels={onModels}/>}
+                {data?.usage && <Tokens usage={data.usage} agents={agents} onModels={onModels} onOpenChat={setActive}/>}
 
                 <Card title='Done recently' count={data?.recent.length} className='mt-4'>
                     {!data ? <Skeleton rows={3}/> : data.recent.length === 0 ? <Empty>Finished tasks from the past week show up here.</Empty> : (
@@ -396,7 +396,7 @@ function DoneTask({run, agents, now, showTokens, onOpen}: {run: ActivityRun; age
 
 // ------------------------------------------------------------ tokens
 
-function Tokens({usage, agents, onModels}: {usage: DashboardUsage; agents: Record<string, Agent>; onModels: () => void}) {
+function Tokens({usage, agents, onModels, onOpenChat}: {usage: DashboardUsage; agents: Record<string, Agent>; onModels: () => void; onOpenChat: (channelId: string) => void}) {
     const month = usage.month.tokensIn + usage.month.tokensOut;
     const week = usage.week.tokensIn + usage.week.tokensOut;
     const budget = usage.budgetUsd;
@@ -447,7 +447,53 @@ function Tokens({usage, agents, onModels}: {usage: DashboardUsage; agents: Recor
                     )}
                 </div>
             </div>
+            <ByChat usage={usage} onOpenChat={onOpenChat}/>
         </Card>
+    );
+}
+
+// Which chats the tokens went to this month: the top few, biggest first.
+function ByChat({usage, onOpenChat}: {usage: DashboardUsage; onOpenChat: (channelId: string) => void}) {
+    const channels = useStore((s) => s.channels);
+    const me = useStore((s) => s.me);
+    const users = useStore((s) => s.users);
+    const chats = (usage.byChat ?? []).filter((c) => c.tokens > 0).slice(0, 8);
+    if (!chats.length) {
+        return null;
+    }
+    const max = Math.max(1, ...chats.map((c) => c.tokens));
+    const total = Math.max(1, usage.month.tokensIn + usage.month.tokensOut);
+    return (
+        <div className='mt-5 border-t border-line/70 pt-4'>
+            <div className='mb-2 text-[12px] font-semibold text-muted'>By chat, this month</div>
+            <ul className='grid gap-x-6 gap-y-1 md:grid-cols-2'>
+                {chats.map((c) => {
+                    const channel = channels[c.channelId];
+                    const name = channel ? channelTitle(channel, me?.id, users) : c.name || (c.type === 'D' ? 'Direct message' : 'A chat you\'re not in');
+                    return (
+                        <li key={c.channelId}>
+                            <button
+                                type='button'
+                                disabled={!channel}
+                                onClick={() => onOpenChat(c.channelId)}
+                                title={channel ? `Open ${name}` : undefined}
+                                className='grid w-full grid-cols-[18px_minmax(0,1fr)_auto_auto] items-center gap-x-2 rounded-lg px-1.5 py-1 text-left text-[12px] enabled:hover:bg-tint'
+                            >
+                                {channel ? <ChatIcon channel={channel} size={18}/> : <span className='size-[18px] rounded-md bg-tint'/>}
+                                <span className='truncate font-semibold text-ink'>{name}</span>
+                                <span className='text-muted tabular-nums'>{compact.format(c.tokens)}</span>
+                                <span className='w-14 text-right text-muted tabular-nums'>{usd(c.usd)}</span>
+                                <span/>
+                                <span className='col-span-3 mt-1 h-1 overflow-hidden rounded-full bg-tint' aria-hidden>
+                                    <span className='block h-full rounded-full bg-[var(--chart-bar)]' style={{width: `${(c.tokens / max) * 100}%`}}/>
+                                </span>
+                                <span className='sr-only'>{Math.round((c.tokens / total) * 100)}% of this month's tokens</span>
+                            </button>
+                        </li>
+                    );
+                })}
+            </ul>
+        </div>
     );
 }
 

@@ -5,7 +5,7 @@ import type {Readable} from 'node:stream';
 
 import {config} from '../config.js';
 import {imageSize, storageKey} from '../files/storage.js';
-import type {FileInfo} from '../shared/types.js';
+import type {FileInfo, FileProps} from '../shared/types.js';
 import {getFile, insertFile, type FileRow} from '../store/files.js';
 import type {UserRow} from '../store/users.js';
 import {verifySignature} from '../util/crypto.js';
@@ -23,7 +23,7 @@ export async function upload(ctx: Ctx, user: UserRow, channelId: string, file: {
     return storeFile(ctx, {workspaceId: channel.workspaceId, channelId, userId: user.id, name: file.filename, mime: file.mimetype, data: file.stream});
 }
 
-export async function storeFile(ctx: Ctx, f: {workspaceId: string; channelId: string | null; userId: string; name: string; mime: string; data: Readable | Buffer}): Promise<FileInfo> {
+export async function storeFile(ctx: Ctx, f: {workspaceId: string; channelId: string | null; userId: string; name: string; mime: string; data: Readable | Buffer; props?: FileProps}): Promise<FileInfo> {
     const id = newId();
     const key = storageKey(f.workspaceId, id);
     const name = (f.name || 'file').replace(/[\\/\r\n\0]/g, '_').slice(0, 200);
@@ -41,7 +41,7 @@ export async function storeFile(ctx: Ctx, f: {workspaceId: string; channelId: st
         const head = Buffer.isBuffer(f.data) ? f.data.subarray(0, 65536) : (await ctx.storage.read(key)).subarray(0, 65536);
         dims = imageSize(head);
     }
-    const row = await insertFile(ctx.sql, {id, workspaceId: f.workspaceId, channelId: f.channelId, userId: f.userId, name, mime: f.mime || 'application/octet-stream', size, width: dims?.width ?? null, height: dims?.height ?? null, storageKey: key});
+    const row = await insertFile(ctx.sql, {id, workspaceId: f.workspaceId, channelId: f.channelId, userId: f.userId, name, mime: f.mime || 'application/octet-stream', size, width: dims?.width ?? null, height: dims?.height ?? null, storageKey: key, props: f.props});
     return fileInfo(row);
 }
 

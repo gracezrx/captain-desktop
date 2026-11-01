@@ -29,16 +29,16 @@ export type ConnectorApp = {
 export const GOOGLE_APPS: ConnectorApp[] = [
     {toolkit: 'gmail', name: 'Gmail', read: ['GMAIL_FETCH_EMAILS'], write: ['GMAIL_CREATE_EMAIL_DRAFT', 'GMAIL_SEND_EMAIL']},
     {toolkit: 'googledrive', name: 'Google Drive', read: ['GOOGLEDRIVE_FIND_FILE', 'GOOGLEDRIVE_LIST_FILES', 'GOOGLEDRIVE_PARSE_FILE'], write: []},
-    {toolkit: 'googledocs', name: 'Google Docs', read: ['GOOGLEDOCS_SEARCH_DOCUMENTS', 'GOOGLEDOCS_GET_DOCUMENT_BY_ID'], write: ['GOOGLEDOCS_CREATE_DOCUMENT']},
-    {toolkit: 'googlesheets', name: 'Google Sheets', read: ['GOOGLESHEETS_SEARCH_SPREADSHEETS', 'GOOGLESHEETS_GET_SPREADSHEET_INFO', 'GOOGLESHEETS_BATCH_GET'], write: []},
+    {toolkit: 'googledocs', name: 'Google Docs', read: ['GOOGLEDOCS_SEARCH_DOCUMENTS', 'GOOGLEDOCS_GET_DOCUMENT_BY_ID'], write: []}, // new docs: create_document
+    {toolkit: 'googlesheets', name: 'Google Sheets', read: ['GOOGLESHEETS_SEARCH_SPREADSHEETS', 'GOOGLESHEETS_GET_SPREADSHEET_INFO', 'GOOGLESHEETS_BATCH_GET'], write: []}, // new sheets: create_spreadsheet
     {toolkit: 'googlecalendar', name: 'Google Calendar', read: ['GOOGLECALENDAR_FIND_EVENT', 'GOOGLECALENDAR_EVENTS_LIST'], write: ['GOOGLECALENDAR_CREATE_EVENT']},
-    {toolkit: 'googleslides', name: 'Google Slides', read: ['GOOGLESLIDES_PRESENTATIONS_GET'], write: []},
+    {toolkit: 'googleslides', name: 'Google Slides', read: ['GOOGLESLIDES_PRESENTATIONS_GET'], write: []}, // new decks: create_presentation
 ];
 
-// An action on someone's own account (sending from their Gmail…): only they
-// may approve it, not a workspace admin.
+// An action on someone's own account (sending from their Gmail, changing
+// their Notion through MCP…): only they may approve it, not a workspace admin.
 export function onOwnAccount(toolName: string): boolean {
-    return GOOGLE_APPS.some((a) => [...a.read, ...a.write].some((s) => s.toLowerCase() === toolName));
+    return toolName.startsWith('mcp_') || GOOGLE_APPS.some((a) => [...a.read, ...a.write].some((s) => s.toLowerCase() === toolName));
 }
 
 export function appFor(toolkit: string): ConnectorApp | undefined {

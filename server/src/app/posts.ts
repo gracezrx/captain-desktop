@@ -5,6 +5,7 @@
 import {z} from 'zod';
 
 import {tx, type Db} from '../db/index.js';
+import {crewId, storedForms} from '../shared/emoji.js';
 import type {Post, PostProps, PostType} from '../shared/types.js';
 import {getAgentsByUserIds} from '../store/agents.js';
 import {audit} from '../store/audit.js';
@@ -17,6 +18,7 @@ import {
 import {getUser, type UserRow} from '../store/users.js';
 import {getMemberRole} from '../store/workspaces.js';
 import {badRequest, forbidden, notFound} from '../util/errors.js';
+import {now} from '../util/ids.js';
 
 import type {Ctx} from './context.js';
 import {postEdited, toChannel as publishToChannel} from './events.js';
@@ -169,16 +171,58 @@ export async function remove(ctx: Ctx, user: UserRow, postId: string): Promise<v
     await publishToChannel(ctx, ctx.sql, post.channelId, {event: 'post_deleted', data: {postId, channelId: post.channelId}});
 }
 
+// Reactions are Captain's own set (shared/emoji.ts); a Unicode emoji from
+// before is stored as its id. Taking one back removes either form.
 export async function react(ctx: Ctx, user: UserRow, postId: string, emoji: string, on: boolean): Promise<void> {
-    const e = z.string().min(1).max(32).parse(emoji);
+    const raw = z.string().min(1).max(32).parse(emoji);
+    const id = crewId(raw);
+    if (on && !id) {
+        throw badRequest('Pick one of Captain\'s reactions.', 'unknown_reaction');
+    }
     const post = await getPost(ctx.sql, postId);
     if (!post || post.deletedAt) {
         throw notFound('Message');
     }
     await requireChannelMember(ctx.sql, post.channelId, user.id);
-    await (on ? addReaction(ctx.sql, postId, user.id, e) : removeReaction(ctx.sql, postId, user.id, e));
+    if (on) {
+        await addReaction(ctx.sql, postId, user.id, id!);
+    } else {
+        for (const form of id ? storedForms(id) : [raw]) {
+            await removeReaction(ctx.sql, postId, user.id, form);
+        }
+    }
+    await reactionsChanged(ctx, post.channelId, postId);
+}
+
+async function reactionsChanged(ctx: Ctx, channelId: string, postId: string): Promise<void> {
     const reactions = (await reactionsFor(ctx.sql, [postId])).get(postId) ?? [];
-    await publishToChannel(ctx, ctx.sql, post.channelId, {event: 'reaction_changed', data: {postId, channelId: post.channelId, reactions}});
+    await publishToChannel(ctx, ctx.sql, channelId, {event: 'reaction_changed', data: {postId, channelId, reactions}});
+}
+
+// An agent's reaction on the message it's working on: Looking while it
+// works, turned into Done (in the same place) when it finishes, gone if it
+// stops. Agents use only these two; their reactions notify nobody.
+export async function agentWorking(ctx: Ctx, agentUserId: string, postId: string, state: 'looking' | 'done' | null): Promise<void> {
+    const post = await getPost(ctx.sql, postId);
+    if (!post || post.deletedAt) {
+        return;
+    }
+    let changed: readonly unknown[] = [];
+    if (state === 'looking') {
+        const has = await ctx.sql`select 1 from reactions where post_id = ${postId} and user_id = ${agentUserId} and emoji in ('looking', 'done')`;
+        if (!has.length) {
+            changed = await ctx.sql`insert into reactions (post_id, user_id, emoji, created_at) values (${postId}, ${agentUserId}, 'looking', ${now()}) on conflict do nothing returning 1`;
+        }
+    } else if (state === 'done') {
+        changed = await ctx.sql`
+            update reactions set emoji = 'done' where post_id = ${postId} and user_id = ${agentUserId} and emoji = 'looking'
+            and not exists (select 1 from reactions where post_id = ${postId} and user_id = ${agentUserId} and emoji = 'done') returning 1`;
+    } else {
+        changed = await ctx.sql`delete from reactions where post_id = ${postId} and user_id = ${agentUserId} and emoji = 'looking' returning 1`;
+    }
+    if (changed.length) {
+        await reactionsChanged(ctx, post.channelId, postId);
+    }
 }
 
 export async function search(ctx: Ctx, user: UserRow, workspaceId: string, q: string): Promise<Post[]> {

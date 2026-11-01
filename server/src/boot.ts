@@ -91,6 +91,7 @@ export async function boot(opts: BootOptions = {}): Promise<Instance> {
     const housekeeping = setInterval(() => {
         void deleteExpiredSessions(sql).catch(() => undefined);
         void jobs.cleanup().catch(() => undefined);
+        void orchestrator.sweepDecisions().catch((err) => log.warn({err: (err as Error).message}, 'decision sweep failed'));
     }, 3_600_000);
 
     // Web search with the OpenRouter key when there's no search key of its own.

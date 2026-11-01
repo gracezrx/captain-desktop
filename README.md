@@ -46,7 +46,8 @@ It was filmed on the real app. The agents' answers are scripted best-case replie
   - One account can belong to several workspaces.
 - **Chat**
   - Channels (public or private), direct messages and threads.
-  - Reactions, files and screenshots, search.
+  - Captain's own 18 reactions (the Crew set); agents mark what they're on with Looking, then Done.
+  - Files and screenshots, search.
   - Unread counts and mentions.
   - Real-time updates that survive reconnects.
 - **Agents**
@@ -60,11 +61,19 @@ It was filmed on the real app. The agents' answers are scripted best-case replie
   - A live plan card shows progress and has a Stop button.
   - Steps can hand questions to each other.
   - Agent replies stream in as they're written.
+- **Real files**
+  - Agents write documents as Word files with a PDF copy, decks as PowerPoint (native charts and tables), and spreadsheets as Excel (typed columns, SUM totals), all in Captain's navy and gold.
+  - With Google connected, each is also made in Google Docs, Slides or Sheets, in a "Captain › chat name" folder in your Drive.
+- **Connections**
+  - Google apps (Gmail, Drive, Docs, Sheets, Calendar, Slides) through Composio.
+  - MCP servers: Granola, Notion and Linear in one click, or any remote MCP server by its address. Each person connects their own; agents read without asking and ask before changing anything.
 - **Home dashboard**
-  - What agents are working on right now, what's waiting on you, what finished, and tokens burned (today, this month, by day and by agent; owners and admins).
+  - What agents are working on right now, what's waiting on you, what finished, and tokens burned (today, this month, by day, by agent and by chat; owners and admins).
+  - Every chat shows its own token use in its header.
 - **Approvals**
-  - Email, and anything an agent marks as needing sign-off, becomes a decision card.
-  - The work pauses and resumes exactly where it stopped, after Approve or Reject.
+  - Email, and anything an agent marks as needing sign-off, becomes a decision card: Approve, Change it, Decline.
+  - The work pauses and resumes exactly where it stopped. Once answered, the card keeps a badge saying who answered and when.
+  - A decision nobody answers is reminded after a day and expires after a week.
 - **Model routing**, following Captain's Smart Router:
   - Three difficulty tiers, with priorities, vision and tool support.
   - Several provider routes per model, falling back automatically, and skipping models that keep failing.
@@ -117,7 +126,7 @@ The server runs on any Postgres 14 or newer, including Supabase ([docs/DEPLOY.md
 cd server && npm test     # needs a captain_test database
 ```
 
-The 65 tests cover:
+The 112 tests cover:
 
 - accounts, invites, roles and password resets
 - private channels and DMs
@@ -131,6 +140,9 @@ The 65 tests cover:
 - database addresses (TLS for Supabase, the transaction pooler warning) and row-level security on every table
 - the job queue's retries and recovery
 - security: what agents may quote where, links that need approval, blocked private addresses, approvals that run once, revoked invites and sessions, forged client addresses
+- real files (Word, PDF, PowerPoint, Excel) and their Google copies, filed in Drive
+- Google apps and MCP servers: sign-in (OAuth with PKCE, once per link), reading without asking, approval before changes, refreshing an expired sign-in, keeping connections to their owner
+- reminders and expiry for unanswered decisions, Crew reactions, token use per chat
 
 ## Background
 

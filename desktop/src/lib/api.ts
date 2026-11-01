@@ -3,7 +3,7 @@
 // the app's settings folder on the Mac, and in local storage on the web.
 
 import {isExtension, isTauri, LOCAL_SERVER, secretDelete, secretGet, secretSet} from './native';
-import type {Agent, AgentTool, Channel, ChannelMember, Connections, Dashboard, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
+import type {Agent, AgentTool, Channel, ChannelMember, ChannelUsage, McpConnections, McpServerInfo, Connections, Dashboard, FileInfo, InvitePreview, ModelInfo, Post, ProviderCheck, ProviderKeyInfo, Run, Session, UsageSummary, User, Workspace, WorkspaceMember, WorkspaceRole} from './types';
 
 export type StoredSession = {serverUrl: string; token: string; userId: string};
 
@@ -206,6 +206,7 @@ export const api = {
     addChannelMembers: (id: string, userIds: string[]) => post(`/channels/${id}/members`, {userIds}),
     viewChannel: (id: string) => post(`/channels/${id}/view`),
     channelRuns: (id: string) => get<Run[]>(`/channels/${id}/runs`),
+    channelUsage: (id: string) => get<ChannelUsage>(`/channels/${id}/usage?tz=${new Date().getTimezoneOffset()}`),
 
     posts: (channelId: string, before?: number) => get<Post[]>(`/channels/${channelId}/posts?limit=60${before ? `&before=${before}` : ''}`),
     post: (id: string) => get<Post>(`/posts/${id}`),
@@ -235,6 +236,12 @@ export const api = {
     connections: (wsId: string) => get<Connections>(`/workspaces/${wsId}/connections`),
     connectApp: (wsId: string, toolkit: string) => post<{url: string}>(`/workspaces/${wsId}/connections/${toolkit}`),
     disconnectApp: (wsId: string, toolkit: string) => del(`/workspaces/${wsId}/connections/${toolkit}`),
+    mcpServers: (wsId: string) => get<McpConnections>(`/workspaces/${wsId}/mcp`),
+    addMcp: (wsId: string, body: {preset?: string; name?: string; url?: string; token?: string; authHeader?: string}) => post<{server: McpServerInfo; signInUrl: string | null}>(`/workspaces/${wsId}/mcp`, body),
+    signInMcp: (wsId: string, id: string) => post<{url: string}>(`/workspaces/${wsId}/mcp/${id}/sign-in`),
+    verifyMcp: (wsId: string, id: string) => post<McpServerInfo>(`/workspaces/${wsId}/mcp/${id}/verify`),
+    setMcpEnabled: (wsId: string, id: string, enabled: boolean) => patch<McpServerInfo>(`/workspaces/${wsId}/mcp/${id}`, {enabled}),
+    removeMcp: (wsId: string, id: string) => del(`/workspaces/${wsId}/mcp/${id}`),
     saveConnectorKey: (apiKey: string) => put('/admin/connector-key', {apiKey}),
     removeConnectorKey: () => del('/admin/connector-key'),
     checkProvider: (id: string) => post<ProviderCheck>(`/admin/providers/${id}/check`),

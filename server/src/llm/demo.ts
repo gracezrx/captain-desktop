@@ -70,7 +70,9 @@ function reply(system: string, messages: ChatMessage[], ask: string): string {
             return `Approved, but this server has no email account yet (\`SMTP_URL\`), so nothing was sent. Copy the draft above and send it yourself.${NOTE}`;
         }
         if (/^Created "/.test(lastToolResult)) {
-            return `Here's the draft, attached as a document.${NOTE}`;
+            const kind = /\.pptx"/.test(lastToolResult) ? 'deck' : /\.xlsx"/.test(lastToolResult) ? 'spreadsheet' : 'document';
+            const google = /Also made it in (Google [A-Za-z]+)/.exec(lastToolResult)?.[1];
+            return `Here's a first draft of the ${kind}${google ? `, also in ${google}` : ''}.${NOTE}`;
         }
         return `Done. ${lastToolResult.slice(0, 300)}${NOTE}`;
     }
@@ -125,9 +127,26 @@ export async function demoCompletion(opts: CallOptions): Promise<CallResult> {
         const change = textOf(last).match(/asked for a change: "([^"]*)"/)?.[1] ?? '';
         text = `Changed it (${change}). Here it is again for your OK.`;
         toolCalls.push(call('send_email', {to: 'team@example.com', subject: 'Update from Captain (revised)', body: `Hi team,\n\n${ask}\n\n(${change})\n\nBest,\nCaptain`}));
-    } else if (last?.role === 'user' && /\b(document|doc|write-?up|one-?pager|report)\b/i.test(ask) && tools.has('create_document') && !/ROLE: SYNTHESIS/.test(system)) {
+    } else if (last?.role === 'user' && /\b(deck|slides|presentation|pitch)\b/i.test(ask) && tools.has('create_presentation') && !/ROLE: SYNTHESIS/.test(system)) {
+        text = 'Making the deck.';
+        toolCalls.push(call('create_presentation', {title: ask.slice(0, 60) || 'Deck', subtitle: 'A first draft prepared in demo mode', slides: [
+            {layout: 'title'},
+            {layout: 'bullets', kicker: 'Why now', title: 'Teams already work with AI in their chats', bullets: ['**3 in 4** teams paste AI answers into chat', 'Context gets lost between tools', 'Approvals happen in side threads']},
+            {layout: 'stats', kicker: 'Early signal', title: 'Pilots are using it every day', stats: [{value: '12', label: 'Pilot teams'}, {value: '4.6', label: 'Runs per person a day'}, {value: '91%', label: 'Weekly retention'}]},
+            {layout: 'chart', kicker: 'Usage', title: 'Runs doubled in four weeks', chart: {type: 'bar', categories: ['Week 1', 'Week 2', 'Week 3', 'Week 4'], series: [{name: 'Runs', values: [180, 240, 310, 390]}]}, takeaway: 'Most growth came from new agents, not new people.'},
+            {layout: 'closing', title: 'Next steps', bullets: ['Review the draft', 'Fill in real numbers']},
+        ]}));
+    } else if (last?.role === 'user' && /\b(spreadsheet|sheet|budget|tracker|table)\b/i.test(ask) && tools.has('create_spreadsheet') && !/ROLE: SYNTHESIS/.test(system)) {
+        text = 'Building the sheet.';
+        toolCalls.push(call('create_spreadsheet', {title: ask.slice(0, 60) || 'Spreadsheet', sheets: [{
+            name: 'Plan', title: ask.slice(0, 80) || 'Plan', note: 'A first draft prepared in demo mode',
+            columns: [{header: 'Item'}, {header: 'Owner'}, {header: 'Cost', type: 'currency'}, {header: 'Due', type: 'date'}],
+            rows: [['Kickoff', 'Grace', 1200, '2026-11-03'], ['Design', 'Mia', 3400, '2026-11-10'], ['Launch', 'Captain', 800, '2026-11-17']],
+            totals: true,
+        }]}));
+    } else if (last?.role === 'user' && /\b(document|doc|write-?up|one-?pager|report|brief|memo|plan)\b/i.test(ask) && tools.has('create_document') && !/ROLE: SYNTHESIS/.test(system)) {
         text = 'Drafting the document.';
-        toolCalls.push(call('create_document', {title: ask.slice(0, 60) || 'Draft', markdown: `# ${ask.slice(0, 60)}\n\n## Summary\n\nA first draft prepared in demo mode.\n\n## Next steps\n\n- Review\n- Approve\n`}));
+        toolCalls.push(call('create_document', {title: ask.slice(0, 60) || 'Draft', subtitle: 'A first draft prepared in demo mode', markdown: `## Summary\n\n${ask.slice(0, 300)}\n\n## What we know\n\n| Area | Status |\n|---|---|\n| Goal | Agreed |\n| Owner | To confirm |\n\n## Next steps\n\n- Review\n- Approve\n`}));
     } else {
         text = (image ? 'I can see the screenshot you shared. ' : '') + reply(system, opts.messages, ask);
     }

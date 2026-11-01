@@ -91,10 +91,11 @@ describe('chat', () => {
 
     it('reactions', async () => {
         const p = await owner.api.post(`/channels/${generalId}/posts`, {message: 'react to me'});
-        await member.api.post(`/posts/${p.id}/reactions`, {emoji: '🎉'});
-        await owner.api.post(`/posts/${p.id}/reactions`, {emoji: '🎉'});
+        await member.api.post(`/posts/${p.id}/reactions`, {emoji: 'celebrate'});
+        await owner.api.post(`/posts/${p.id}/reactions`, {emoji: '🎉'}); // Unicode from before: stored as its Crew id
+        await expectStatus(owner.api.post(`/posts/${p.id}/reactions`, {emoji: '🦄'}), 400);
         let post = await owner.api.get(`/posts/${p.id}`);
-        assert.deepEqual(post.reactions, [{emoji: '🎉', userIds: [member.session.user.id, owner.session.user.id]}]);
+        assert.deepEqual(post.reactions, [{emoji: 'celebrate', userIds: [member.session.user.id, owner.session.user.id]}]);
         await member.api.del(`/posts/${p.id}/reactions/${encodeURIComponent('🎉')}`);
         post = await owner.api.get(`/posts/${p.id}`);
         assert.deepEqual(post.reactions[0].userIds, [owner.session.user.id]);

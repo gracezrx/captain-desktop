@@ -20,6 +20,7 @@ import {AppError} from '../util/errors.js';
 import {log} from '../util/log.js';
 
 import {withoutImageData} from './history.js';
+import {mcpTools} from '../connectors/mcp/tools.js';
 import {connectorTools} from '../connectors/tools.js';
 
 import {getTool, toolDefs, toolsFor} from './tools/index.js';
@@ -64,7 +65,6 @@ const ACTIVITY: Record<string, (args: Record<string, unknown>) => string> = {
     read_url: (a) => `Reading ${String(a.url ?? 'a page').slice(0, 80)}`,
     search_workspace: (a) => `Searching messages for "${String(a.query ?? '').slice(0, 60)}"`,
     read_channel: (a) => `Reading ${String(a.channel ?? 'the chat').replace(/^#/, '')}`,
-    create_document: (a) => `Writing "${String(a.title ?? 'a document').slice(0, 60)}"`,
     ask_agent: (a) => `Asking @${String(a.agent ?? 'a teammate').replace(/^@/, '')}`,
 };
 
@@ -93,8 +93,10 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
     const {ctx, run, agent, agentUser, channel, requester} = input;
     const state: StepState = {messages: [...input.state.messages], pending: [...input.state.pending], fileIds: [...input.state.fileIds]};
     // Its own tools, plus the Google apps the person it works for connected.
-    const google = input.useTools ? await connectorTools(ctx, requester, channel.workspaceId) : [];
-    const tools = [...(input.useTools ? toolsFor(agent) : []), ...google];
+    const [google, mcp] = input.useTools ?
+        await Promise.all([connectorTools(ctx, requester, channel.workspaceId), mcpTools(ctx, requester, channel.workspaceId)]) :
+        [[], []];
+    const tools = [...(input.useTools ? toolsFor(agent) : []), ...google, ...mcp];
     const allowed = new Set(tools.map((t) => t.name));
     const byName = new Map(tools.map((t) => [t.name, t]));
     const lookup = (name: string): Tool | undefined => byName.get(name) ?? getTool(name);
@@ -311,7 +313,7 @@ export async function runAgent(input: RunnerInput): Promise<RunnerOutcome> {
                 tools: tools.length && !lastRound ? toolDefs(tools) : undefined,
                 signal: input.signal,
                 onText: (t) => stream(t),
-                attribution: {userId: requester.id, agentId: agent.id, runId: run.id, stepId: input.stepId},
+                attribution: {userId: requester.id, agentId: agent.id, runId: run.id, stepId: input.stepId, channelId: run.channelId},
             });
             costUsd += res.costUsd;
             model = {id: res.modelId, provider: res.provider, tier: res.tier, costUsd};

@@ -15,7 +15,7 @@ import type {Ctx} from '../app/context.js';
 import {postEdited, toChannel as publishToChannel} from '../app/events.js';
 import type {PostAction} from '../app/hooks.js';
 import {atLeast} from '../app/permissions.js';
-import {savePost} from '../app/posts.js';
+import {agentWorking, savePost} from '../app/posts.js';
 import {config} from '../config.js';
 import {tx, type Db} from '../db/index.js';
 import type {ChatMessage} from '../llm/types.js';
@@ -97,6 +97,7 @@ export class Orchestrator {
 
     async publishRun(run: RunRow): Promise<void> {
         await publishToChannel(this.ctx, this.ctx.sql, run.channelId, {event: 'run_updated', data: {runId: run.id, channelId: run.channelId, status: run.status, triggerPostId: run.triggerPostId}});
+        await this.markTrigger(run).catch((err) => log.warn({err: (err as Error).message, runId: run.id}, 'couldn\'t update the working reaction'));
         if (run.cardPostId) {
             const steps = await listSteps(this.ctx.sql, run.id);
             const plan: PlanCard = {
@@ -108,6 +109,20 @@ export class Orchestrator {
             const row = await mergePostProps(this.ctx.sql, run.cardPostId, {plan});
             await postEdited(this.ctx, this.ctx.sql, row);
         }
+    }
+
+    // The agent's Looking / Done reaction on the message that asked for the
+    // work. Not on messages Captain joined in on unasked.
+    private async markTrigger(run: RunRow): Promise<void> {
+        if (!run.triggerPostId || run.unprompted) {
+            return;
+        }
+        const agent = await getAgent(this.ctx.sql, run.agentId);
+        if (!agent) {
+            return;
+        }
+        const state = run.status === 'succeeded' ? 'done' : run.status === 'failed' || run.status === 'cancelled' ? null : 'looking';
+        await agentWorking(this.ctx, agent.userId, run.triggerPostId, state);
     }
 
     private async say(run: RunRow, agent: AgentRow, message: string, rootId: string | null, props: Record<string, unknown> = {}): Promise<string | null> {
@@ -340,7 +355,7 @@ export class Orchestrator {
             await this.finishStep(run, step, {status: 'failed', error: (e as Error).message});
             return;
         }
-        const tier = await chooseTier(this.ctx, run.workspaceId, sc.agent, first.text, run.kind === 'plan' ? 'step' : 'reply');
+        const tier = await chooseTier(this.ctx, run.workspaceId, sc.agent, first.text, run.kind === 'plan' ? 'step' : 'reply', run.channelId);
         await this.drive(run, step, sc, {messages: first.messages, pending: [], fileIds: []}, {tier, needVision: first.hasImages, jobSignal});
     }
 
@@ -475,7 +490,7 @@ export class Orchestrator {
         const state = (step.transcript ?? {messages: [], pending: [], fileIds: []}) as StepState;
         const lastUser = [...state.messages].reverse().find((m) => m.role === 'user');
         const text = typeof lastUser?.content === 'string' ? lastUser.content : '';
-        const tier = await chooseTier(this.ctx, run.workspaceId, sc.agent, text, run.kind === 'plan' ? 'step' : 'reply');
+        const tier = await chooseTier(this.ctx, run.workspaceId, sc.agent, text, run.kind === 'plan' ? 'step' : 'reply', run.channelId);
         await this.drive(run, step, sc, state, {tier, needVision: false, resume: approval, jobSignal});
     }
 
@@ -517,7 +532,7 @@ export class Orchestrator {
         try {
             const out = await runAgent({
                 ctx: this.ctx, run, stepId: 'synthesis', agent: captain, agentUser: captainUser, requester, channel: setting.channel,
-                threadRoot: run.rootPostId, purpose: 'synthesis', tier: await chooseTier(this.ctx, run.workspaceId, captain, run.goal, 'synthesis'), needVision: false,
+                threadRoot: run.rootPostId, purpose: 'synthesis', tier: await chooseTier(this.ctx, run.workspaceId, captain, run.goal, 'synthesis', run.channelId), needVision: false,
                 postType: '', postProps: {result: {runId}, ...(run.unprompted ? {joinedIn: true} : {})},
                 state: {messages: [{role: 'system', content: synthesisSystem(captain, setting, run.goal, results)}, {role: 'user', content: `${requester.displayName}: ${trigger?.message ?? run.goal}`}], pending: [], fileIds: []},
                 useTools: false, signal: ctrl.signal,
@@ -538,7 +553,8 @@ export class Orchestrator {
 
     // ------------------------------------------------------------ cancel
 
-    async cancel(runId: string, userId: string): Promise<RunRow> {
+    // `timeout`: nobody answered its decision in a week (see sweepDecisions).
+    async cancel(runId: string, userId: string | null, reason: 'cancelled' | 'timeout' = 'cancelled'): Promise<RunRow> {
         const result = await tx(this.ctx.sql, async (t) => {
             const run = await lockRun(t, runId);
             if (!run) {
@@ -558,13 +574,48 @@ export class Orchestrator {
                 const post = await getPost(this.ctx.sql, e.postId);
                 const card = post?.props.decision;
                 if (card) {
-                    const row = await mergePostProps(this.ctx.sql, e.postId, {decision: {...card, status: 'expired'}});
+                    const row = await mergePostProps(this.ctx.sql, e.postId, {decision: {...card, status: 'expired', ...(reason === 'timeout' ? {timedOut: true} : {})}});
                     await postEdited(this.ctx, this.ctx.sql, row);
                 }
             }
         }
-        audit(this.ctx.sql, {workspaceId: result.run.workspaceId, userId, action: 'run_cancelled', target: runId});
+        audit(this.ctx.sql, {workspaceId: result.run.workspaceId, userId, action: reason === 'timeout' ? 'run_expired' : 'run_cancelled', target: runId});
         await this.publishRun(result.run);
         return result.run;
     }
+
+    // ------------------------------------------------------------ unanswered decisions
+
+    // A decision nobody answered gets one reminder after a day: Captain
+    // mentions the person who can answer, in the decision's thread. After a
+    // week it expires and the work waiting on it stops.
+    async sweepDecisions(at = now()): Promise<void> {
+        const DAY = 86_400_000;
+        const due = await this.ctx.sql`
+            update approvals set reminded_at = ${at}
+            where status = 'pending' and reminded_at is null and created_at < ${at - DAY} and created_at >= ${at - DECISION_DAYS * DAY}
+            returning id, run_id, post_id, requested_by, title, created_at`;
+        for (const a of due) {
+            try {
+                const [loaded, person, post] = await Promise.all([
+                    a.runId ? this.load(a.runId as string) : null,
+                    a.requestedBy ? getUser(this.ctx.sql, a.requestedBy as string) : null,
+                    a.postId ? getPost(this.ctx.sql, a.postId as string) : null,
+                ]);
+                if (!loaded?.channelOk || !person || !post) {
+                    continue;
+                }
+                const left = Math.max(1, Math.ceil((Number(a.createdAt) + DECISION_DAYS * DAY - at) / DAY));
+                await this.say(loaded.run, loaded.captain, `@${person.username} still waiting on your answer: **${a.title}**. It expires in ${left} ${left === 1 ? 'day' : 'days'}.`, post.rootId ?? post.id, {reminder: a.id});
+            } catch (err) {
+                log.warn({err: (err as Error).message, approvalId: a.id}, 'couldn\'t send a decision reminder');
+            }
+        }
+        const stale = await this.ctx.sql`select distinct run_id from approvals where status = 'pending' and run_id is not null and created_at < ${at - DECISION_DAYS * DAY}`;
+        for (const r of stale) {
+            await this.cancel(r.runId as string, null, 'timeout').catch((err) => log.warn({err: (err as Error).message}, 'couldn\'t expire a decision'));
+        }
+    }
 }
+
+export const DECISION_DAYS = 7;

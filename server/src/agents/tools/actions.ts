@@ -1,36 +1,12 @@
 // Tools that make something or reach outside the workspace.
-// - create_document: a Markdown file attached to the agent's reply
 // - request_approval: ask a person to sign off before the agent goes on
 // - send_email: real email over SMTP, always after a person approves
 
-import {storeFile} from '../../app/files.js';
 import {config} from '../../config.js';
 import {audit} from '../../store/audit.js';
 import {sendMail} from '../../util/mail.js';
 
 import {str, type Tool} from './types.js';
-
-export const createDocument: Tool = {
-    name: 'create_document',
-    description: 'Create a document (Markdown) and attach it to your reply. Use for anything longer than a chat message: briefs, plans, reports, drafts.',
-    parameters: {
-        type: 'object',
-        properties: {title: {type: 'string'}, markdown: {type: 'string', description: 'The full document in Markdown'}},
-        required: ['title', 'markdown'],
-    },
-    external: false,
-    available: () => true,
-    async run(tc, args) {
-        const title = str(args.title, 120).trim() || 'Document';
-        const body = str(args.markdown, 200_000);
-        const filename = `${title.replace(/[^\p{L}\p{N} _-]+/gu, '').trim().replace(/\s+/g, '-').slice(0, 80) || 'document'}.md`;
-        const info = await storeFile(tc.ctx, {
-            workspaceId: tc.channel.workspaceId, channelId: tc.channel.id, userId: tc.agentUser.id,
-            name: filename, mime: 'text/markdown', data: Buffer.from(body.startsWith('#') ? body : `# ${title}\n\n${body}`, 'utf8'),
-        });
-        return {content: `Created "${filename}" (${body.length} characters). It will be attached to your reply.`, fileIds: [info.id]};
-    },
-};
 
 export const requestApproval: Tool = {
     name: 'request_approval',

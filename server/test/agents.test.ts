@@ -5,7 +5,7 @@ import {after, before, describe, it} from 'node:test';
 
 import {expectStatus, signup, startServer, type TestServer, waitFor} from './helpers.js';
 
-type Post = {id: string; type: string; message: string; userId: string; rootId: string | null; props: Record<string, any>; files: {name: string; url: string}[]};
+type Post = {id: string; type: string; message: string; userId: string; rootId: string | null; props: Record<string, any>; files: {name: string; url: string}[]; createdAt: number};
 type Run = {id: string; status: string; kind: string; rootPostId: string | null; steps: {id: string; status: string; agentId: string}[]};
 
 describe('agents and orchestration (demo model)', () => {
@@ -176,6 +176,30 @@ describe('agents and orchestration (demo model)', () => {
         await owner.api.post(`/posts/${again.id}/actions/reject`);
     });
 
+    it('a decision nobody answers is reminded once after a day, and expires after a week', async () => {
+        const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@writer publish the launch post to our customers'});
+        const run = await runFor(owner.api, generalId, p.id);
+        assert.equal(run.status, 'waiting_approval');
+        const card = (await owner.api.get(`/posts/${p.id}/thread`) as Post[]).find((x) => x.type === 'decision')!;
+        const orchestrator = s.instance.orchestrator;
+        const t0 = card.createdAt;
+        await orchestrator.sweepDecisions(t0 + 3_600_000);
+        const me = await owner.api.get('/users/me');
+        const reminders = async () => (await owner.api.get(`/posts/${p.id}/thread`) as Post[]).filter((x) => x.props.reminder);
+        assert.equal((await reminders()).length, 0, 'not before a day');
+        await orchestrator.sweepDecisions(t0 + 25 * 3_600_000);
+        const [reminder] = await reminders();
+        assert.match(reminder.message, new RegExp(`^@${me.username} still waiting on your answer: \\*\\*.+\\*\\*\\. It expires in 6 days\\.$`));
+        await orchestrator.sweepDecisions(t0 + 30 * 3_600_000);
+        assert.equal((await reminders()).length, 1, 'once');
+        await orchestrator.sweepDecisions(t0 + 7 * 86_400_000 + 60_000);
+        const expired = (await owner.api.get(`/posts/${p.id}/thread`) as Post[]).find((x) => x.id === card.id)!;
+        assert.equal(expired.props.decision.status, 'expired');
+        assert.equal(expired.props.decision.timedOut, true);
+        assert.equal(((await owner.api.get(`/runs/${run.id}`)) as Run).status, 'cancelled');
+        await expectStatus(owner.api.post(`/posts/${card.id}/actions/approve`), 409);
+    });
+
     it('cancelling a waiting run expires its approval', async () => {
         const p = await owner.api.post(`/channels/${generalId}/posts`, {message: '@writer publish the announcement to our customers'});
         const run = await runFor(owner.api, generalId, p.id);
@@ -197,10 +221,11 @@ describe('agents and orchestration (demo model)', () => {
         const posts: Post[] = await owner.api.get(`/channels/${dm.id}/posts`);
         const reply = posts.find((x) => x.userId === writer.userId)!;
         assert.equal(reply.rootId, null);
-        assert.equal(reply.files.length, 1);
-        assert.match(reply.files[0].name, /\.md$/);
+        assert.deepEqual(reply.files.map((f: {name: string}) => f.name.split('.').pop()), ['docx', 'pdf']);
+        const asked = posts.find((x) => x.id === p.id) as Post & {reactions: {emoji: string; userIds: string[]}[]};
+        assert.deepEqual(asked.reactions, [{emoji: 'done', userIds: [writer.userId]}], 'Looking while working, then Done in its place');
         const doc = await fetch(`${s.base}${reply.files[0].url}`);
-        assert.match(await doc.text(), /^# /);
+        assert.equal(Buffer.from(await doc.arrayBuffer()).subarray(0, 2).toString(), 'PK');
         assert.ok(p.id);
     });
 

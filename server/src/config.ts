@@ -124,6 +124,10 @@ export const config = {
         // key can also be pasted in Settings → Connections by a server admin.
         composioKey: env('COMPOSIO_API_KEY'),
         composioBaseUrl: env('COMPOSIO_BASE_URL', 'https://backend.composio.dev/api/v3').replace(/\/+$/, ''),
+        // MCP servers (Granola, Notion, Linear, your own): https on the public
+        // internet only, unless this is on (a server you run on your own
+        // network, or tests).
+        mcpAllowPrivate: bool('MCP_ALLOW_PRIVATE', false),
     },
     tools: {
         tavilyKey: env('TAVILY_API_KEY'),

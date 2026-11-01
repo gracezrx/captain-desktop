@@ -33,7 +33,7 @@ const agentInput = z.object({
     instructions: z.string().trim().min(10, 'Tell the agent what it does (at least a sentence).').max(8000),
     tier: tierSchema.default('auto'),
     model: z.string().max(80).nullable().default(null),
-    tools: toolsSchema.default(['search_workspace', 'read_url', 'create_document']),
+    tools: toolsSchema.default(['search_workspace', 'read_url', 'create_document', 'create_presentation', 'create_spreadsheet']),
     portrait: z.string().default('fox'),
 });
 

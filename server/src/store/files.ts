@@ -1,4 +1,5 @@
 import type {Db} from '../db/index.js';
+import type {FileProps} from '../shared/types.js';
 import {newId, now} from '../util/ids.js';
 
 export type FileRow = {
@@ -13,15 +14,21 @@ export type FileRow = {
     width: number | null;
     height: number | null;
     storageKey: string;
+    props: FileProps;
     createdAt: number;
 };
 
-export async function insertFile(db: Db, f: Omit<FileRow, 'id' | 'createdAt' | 'postId'> & {id?: string}): Promise<FileRow> {
+export async function insertFile(db: Db, f: Omit<FileRow, 'id' | 'createdAt' | 'postId' | 'props'> & {id?: string; props?: FileProps}): Promise<FileRow> {
     const [row] = await db`
-        insert into files (id, workspace_id, channel_id, user_id, name, mime, size, width, height, storage_key, created_at)
-        values (${f.id ?? newId()}, ${f.workspaceId}, ${f.channelId}, ${f.userId}, ${f.name}, ${f.mime}, ${f.size}, ${f.width}, ${f.height}, ${f.storageKey}, ${now()})
+        insert into files (id, workspace_id, channel_id, user_id, name, mime, size, width, height, storage_key, props, created_at)
+        values (${f.id ?? newId()}, ${f.workspaceId}, ${f.channelId}, ${f.userId}, ${f.name}, ${f.mime}, ${f.size}, ${f.width}, ${f.height}, ${f.storageKey}, ${db.json((f.props ?? {}) as never)}, ${now()})
         returning *`;
     return row as unknown as FileRow;
+}
+
+// Add to what a file's card shows (its Google copy, say).
+export async function updateFileProps(db: Db, id: string, props: FileProps): Promise<void> {
+    await db`update files set props = props || ${db.json(props as never)} where id = ${id}`;
 }
 
 export async function getFile(db: Db, id: string): Promise<FileRow | null> {

@@ -69,6 +69,11 @@ function safeLookup(hostname: string, options: dns.LookupOptions, callback: (err
 
 const dispatcher = new Agent({connect: {lookup: safeLookup as never, timeout: 10_000}});
 
+// For other outside calls that must stay off private networks (MCP servers).
+export function publicOnlyDispatcher(): Agent {
+    return dispatcher;
+}
+
 export function checkUrl(raw: string): URL {
     let url: URL;
     try {

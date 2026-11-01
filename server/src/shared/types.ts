@@ -66,6 +66,20 @@ export type FileInfo = {
     width: number | null;
     height: number | null;
     url: string; // signed, usable in <img src> for a limited time
+    props: FileProps;
+};
+
+// What a file Captain made says about itself, for its card.
+export type GoogleApp = 'docs' | 'slides' | 'sheets';
+export type FileProps = {
+    made?: 'document' | 'presentation' | 'spreadsheet';
+    words?: number;
+    slides?: number;
+    sheets?: number;
+    rows?: number;
+    google?: {app: GoogleApp; id: string; url: string; folder?: string};
+    pdf?: string; // the id of the PDF copy, attached to the same message
+    copyOf?: string; // this file is the PDF copy of that one: shown on its card
 };
 
 export type ModelAttribution = {id: string; provider: string; tier: Tier; costUsd: number};
@@ -93,6 +107,7 @@ export type DecisionCard = {
     decidedBy: ID | null;
     decidedAt: Ms | null;
     note?: string | null; // "Change it": what the person asked to change
+    timedOut?: boolean; // expired because nobody answered in a week
 };
 
 export type PostType = '' | 'system' | 'plan' | 'decision' | 'agent_step';
@@ -198,7 +213,18 @@ export type DashboardUsage = {
     budgetUsd: number | null;
     daily: {day: Ms; tokens: number; usd: number}[]; // past 14 local days, oldest first; day = local midnight
     byAgent: {agentId: ID | null; tokens: number; usd: number}[]; // this month
+    byChat: {channelId: ID; name: string; type: ChannelType; tokens: number; usd: number}[]; // this month, top 12
     errorsToday: number; // failed model calls (Captain retries most of them)
+};
+
+// One chat's token use (everyone in the chat sees tokens; dollars are for owners and admins).
+export type ChannelUsage = {
+    channelId: ID;
+    today: TokenTotals;
+    week: TokenTotals;
+    month: TokenTotals;
+    byAgent: {agentId: ID | null; tokens: number; usd: number}[]; // this month
+    showsUsd: boolean;
 };
 
 export type Dashboard = {
@@ -288,6 +314,25 @@ export type ConnectionApp = {
     name: string;
     status: 'connected' | 'pending' | 'expired' | 'not_connected';
     writes: boolean; // has actions that send or change something (they ask first)
+};
+
+// MCP servers you connected (Settings → Connections).
+export type McpServerInfo = {
+    id: ID;
+    preset: string | null; // granola, notion, linear; null for one added by address
+    name: string;
+    url: string; // without its query string
+    status: 'connected' | 'needs_sign_in' | 'error' | 'unverified';
+    lastError: string | null;
+    authMode: 'none' | 'token' | 'oauth';
+    tools: {name: string; reads: boolean}[];
+    enabled: boolean;
+    verifiedAt: Ms | null;
+};
+
+export type McpConnections = {
+    presets: {id: string; name: string; description: string}[];
+    servers: McpServerInfo[];
 };
 
 export type Connections = {

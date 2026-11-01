@@ -2,13 +2,14 @@ import type {AgentTool} from '../../shared/types.js';
 import type {AgentRow} from '../../store/agents.js';
 import type {ToolDef} from '../../llm/types.js';
 
-import {createDocument, requestApproval, sendEmail} from './actions.js';
+import {requestApproval, sendEmail} from './actions.js';
+import {createDocument, createPresentation, createSpreadsheet} from './files.js';
 import {askAgent} from './handoff.js';
 import type {Tool} from './types.js';
 import {readUrl, webSearch} from './web.js';
 import {readChannel, searchWorkspace} from './workspace.js';
 
-export const TOOLS: Tool[] = [searchWorkspace, readChannel, webSearch, readUrl, createDocument, askAgent, requestApproval, sendEmail];
+export const TOOLS: Tool[] = [searchWorkspace, readChannel, webSearch, readUrl, createDocument, createPresentation, createSpreadsheet, askAgent, requestApproval, sendEmail];
 
 const byName = new Map(TOOLS.map((t) => [t.name, t]));
 

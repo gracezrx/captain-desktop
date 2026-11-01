@@ -137,14 +137,14 @@ export async function makePlan(ctx: Ctx, args: {captain: AgentRow; team: AgentRo
         const res = await ctx.router.complete({
             workspaceId: args.workspaceId,
             purpose: 'plan',
-            tier: await chooseTier(ctx, args.workspaceId, args.captain, args.text, 'plan'),
+            tier: await chooseTier(ctx, args.workspaceId, args.captain, args.text, 'plan', args.setting.channel.id),
             pinnedModel: args.captain.model,
             json: true,
             temperature: 0.2,
             maxTokens: 1500,
             messages: [{role: 'system', content: plannerSystem(args.captain, specialists, args.setting, config.agents.maxSteps, named)}, ...args.conversation.slice(-8)],
             signal: args.signal,
-            attribution: {userId: args.requesterId, agentId: args.captain.id, runId: args.runId},
+            attribution: {userId: args.requesterId, agentId: args.captain.id, runId: args.runId, channelId: args.setting.channel.id},
         });
         const plan = validatePlan(parseJson(res.text), specialists, config.agents.maxSteps, named ? 1 : 2);
         return named ? coverNamed(plan, specialists, args.text, config.agents.maxSteps) : plan;

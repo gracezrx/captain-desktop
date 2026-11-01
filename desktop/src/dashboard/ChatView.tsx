@@ -1,6 +1,7 @@
-import {AtSign, LogOut, UserPlus, X} from 'lucide-react';
+import {AtSign, Gauge, LogOut, UserPlus, X} from 'lucide-react';
 import {Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react';
 
+import {portraitSrc} from '../components/Avatar';
 import {ChatIcon} from '../components/ChatIcon';
 import {Composer} from '../components/Composer';
 import {isGrouped, MessageRow} from '../components/MessageRow';
@@ -9,7 +10,7 @@ import {api, errorMessage} from '../lib/api';
 import {dayLabel} from '../lib/format';
 import {mentionsAgent} from '../lib/send';
 import {agentForUser, channelTitle, displayName, isAgentChannel, otherUserId, useStore} from '../lib/store';
-import type {ClientPost} from '../lib/types';
+import type {ChannelUsage, ClientPost} from '../lib/types';
 
 import {Overview} from './Overview';
 
@@ -100,6 +101,7 @@ function Chat({channelId, onModels}: {channelId: string; onModels: () => void}) 
                         <h1 className='truncate text-[16px] font-extrabold tracking-tight text-ink'>{title}</h1>
                         <p className='truncate text-[12px] text-muted'>{subtitle}</p>
                     </div>
+                    <ChatTokens channelId={channelId} activity={count}/>
                     {isGroup && <JoinsIn channelId={channelId} on={channel.captainJoinsIn !== false}/>}
                     {isChannel && <ChannelMenu channelId={channelId} general={channel.name === 'general'}/>}
                 </header>
@@ -235,6 +237,107 @@ function JoinsIn({channelId, on}: {channelId: string; on: boolean}) {
         </button>
     );
 }
+
+// Tokens this chat has used: a small pill in the header, with today, the
+// past week, this month and by agent when you open it. Everyone in the chat
+// sees tokens; owners and admins also see dollars.
+function ChatTokens({channelId, activity}: {channelId: string; activity: number}) {
+    const agents = useStore((s) => s.agents);
+    const [usage, setUsage] = useState<ChannelUsage | null>(null);
+    const [open, setOpen] = useState(false);
+    const box = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        setUsage(null);
+    }, [channelId]);
+    // Again after new messages (an agent's reply has tokens), a moment later.
+    useEffect(() => {
+        let live = true;
+        const t = setTimeout(() => {
+            api.channelUsage(channelId).then((u) => live && setUsage(u)).catch(() => undefined);
+        }, 800);
+        return () => {
+            live = false;
+            clearTimeout(t);
+        };
+    }, [channelId, activity, open]);
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+        const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+        const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+        document.addEventListener('mousedown', away);
+        document.addEventListener('keydown', esc);
+        return () => {
+            document.removeEventListener('mousedown', away);
+            document.removeEventListener('keydown', esc);
+        };
+    }, [open]);
+    if (!usage) {
+        return null;
+    }
+    const sum = (t: {tokensIn: number; tokensOut: number}) => t.tokensIn + t.tokensOut;
+    const month = sum(usage.month);
+    const dollars = (n: number) => (n > 0 && n < 0.01 ? '<$0.01' : `$${n.toFixed(2)}`);
+    const rows: [string, ChannelUsage['month']][] = [['Today', usage.today], ['Past 7 days', usage.week], ['This month', usage.month]];
+    const byAgent = usage.byAgent.filter((a) => a.tokens > 0).slice(0, 5);
+    const max = Math.max(1, ...byAgent.map((a) => a.tokens));
+    return (
+        <div ref={box} className='relative'>
+            <button
+                type='button'
+                onClick={() => setOpen((o) => !o)}
+                aria-expanded={open}
+                title='Tokens this chat used this month'
+                className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold ring-1 transition-colors ${open ? 'bg-tint text-ink ring-accent/30' : 'text-muted ring-line hover:bg-tint hover:text-ink'}`}
+            >
+                <Gauge size={14}/>
+                {tokenCount.format(month)} <span className='font-medium'>tokens</span>
+            </button>
+            {open && (
+                <div className='absolute top-10 right-0 z-30 w-72 rounded-2xl bg-surface p-4 ring-1 ring-line' style={{boxShadow: 'var(--shadow-overlay)'}}>
+                    <div className='text-[13px] font-bold text-ink'>Tokens in this chat</div>
+                    <dl className='mt-2 space-y-1 text-[12.5px]'>
+                        {rows.map(([label, t]) => (
+                            <div key={label} className='flex items-baseline justify-between gap-3'>
+                                <dt className='text-muted'>{label}</dt>
+                                <dd className='font-semibold text-ink tabular-nums'>
+                                    {tokenCount.format(sum(t))}
+                                    {usage.showsUsd && <span className='ml-1.5 font-medium text-muted'>{dollars(t.usd)}</span>}
+                                </dd>
+                            </div>
+                        ))}
+                    </dl>
+                    {byAgent.length > 0 && (
+                        <>
+                            <div className='mt-3 mb-1.5 text-[11.5px] font-semibold text-muted'>By agent, this month</div>
+                            <ul className='space-y-1.5'>
+                                {byAgent.map((a) => {
+                                    const agent = a.agentId ? agents[a.agentId] : undefined;
+                                    return (
+                                        <li key={a.agentId ?? 'other'} className='grid grid-cols-[16px_minmax(0,1fr)_auto] items-center gap-x-2 text-[12px]'>
+                                            <img src={portraitSrc(agent?.portrait, agent?.handle)} alt='' className='size-4 rounded ring-1 ring-line'/>
+                                            <span className='truncate font-semibold text-ink'>{agent?.name ?? 'Other'}</span>
+                                            <span className='text-muted tabular-nums'>{tokenCount.format(a.tokens)}</span>
+                                            <span/>
+                                            <span className='col-span-2 h-1 overflow-hidden rounded-full bg-tint' aria-hidden>
+                                                <span className='block h-full rounded-full bg-[var(--chart-bar)]' style={{width: `${(a.tokens / max) * 100}%`}}/>
+                                            </span>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        </>
+                    )}
+                    {month === 0 && <p className='mt-2 text-[12px] text-muted'>No agent work in this chat this month.</p>}
+                    {!usage.showsUsd && month > 0 && <p className='mt-3 text-[11px] text-muted'>Owners and admins also see what it cost.</p>}
+                </div>
+            )}
+        </div>
+    );
+}
+
+const tokenCount = new Intl.NumberFormat('en', {notation: 'compact', maximumFractionDigits: 1});
 
 function ChannelMenu({channelId, general}: {channelId: string; general: boolean}) {
     const [open, setOpen] = useState(false);

@@ -24,6 +24,22 @@ function fakeComposio() {
     const schemas: Record<string, unknown> = {
         GMAIL_FETCH_EMAILS: {description: 'Fetch emails from Gmail.', input_parameters: {type: 'object', title: 'In', properties: {query: {type: 'string'}}}},
         GMAIL_SEND_EMAIL: {description: 'Send an email.', input_parameters: {recipient_email: {type: 'string', required: true}, subject: {type: 'string'}, body: {type: 'string', required: true}}},
+        // Making Google files (create_document / create_presentation / create_spreadsheet).
+        GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN: {description: 'Create a doc from Markdown.', input_parameters: {type: 'object', properties: {title: {type: 'string'}, markdown_text: {type: 'string'}}}},
+        GOOGLESLIDES_CREATE_SLIDES_MARKDOWN: {description: 'Create slides from Markdown.', input_parameters: {type: 'object', properties: {title: {type: 'string'}, markdown_text: {type: 'string'}}}},
+        GOOGLESHEETS_CREATE_GOOGLE_SHEET1: {description: 'Create a sheet.', input_parameters: {type: 'object', properties: {title: {type: 'string'}}}},
+        GOOGLESHEETS_ADD_SHEET: {description: 'Add a tab.', input_parameters: {type: 'object', properties: {spreadsheet_id: {type: 'string'}, properties: {type: 'object'}}}},
+        GOOGLESHEETS_VALUES_UPDATE: {description: 'Write values.', input_parameters: {type: 'object', properties: {spreadsheet_id: {type: 'string'}, range: {type: 'string'}, values: {type: 'array'}, value_input_option: {type: 'string'}}}},
+        GOOGLEDRIVE_CREATE_FOLDER: {description: 'Create a folder.', input_parameters: {type: 'object', properties: {folder_name: {type: 'string'}, parent_id: {type: 'string'}}}},
+        GOOGLEDRIVE_MOVE_FILE: {description: 'Move a file.', input_parameters: {type: 'object', properties: {file_id: {type: 'string'}, add_parents: {type: 'string'}, remove_parents: {type: 'string'}}}},
+    };
+    let made = 0;
+    const answers: Record<string, () => unknown> = {
+        GMAIL_FETCH_EMAILS: () => ({messages: [{subject: 'Q3 numbers', snippet: 'Revenue up 18%'}]}),
+        GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN: () => ({response_data: {documentId: `doc_${++made}xxxxxxxxxx`, title: 'x'}}),
+        GOOGLESLIDES_CREATE_SLIDES_MARKDOWN: () => ({presentation_url: `https://docs.google.com/presentation/d/pres_${++made}xxxxxxxxxx/edit`}),
+        GOOGLESHEETS_CREATE_GOOGLE_SHEET1: () => ({spreadsheetId: `sheet_${++made}xxxxxxxxxx`}),
+        GOOGLEDRIVE_CREATE_FOLDER: () => ({id: `folder_${++made}xxxxxxxxxx`, name: 'x'}),
     };
     const server = http.createServer((req, res) => {
         let raw = '';
@@ -71,18 +87,20 @@ function fakeComposio() {
                 return schemas[slug] ? send(200, {slug, ...schemas[slug] as object}) : send(404, {error: {message: 'Tool not found'}});
             }
             if (req.method === 'POST' && p.startsWith('/tools/execute/')) {
-                return send(200, {successful: true, data: {messages: [{subject: 'Q3 numbers', snippet: 'Revenue up 18%'}]}});
+                const slug = decodeURIComponent(p.split('/').at(-1)!);
+                return send(200, {successful: true, data: answers[slug]?.() ?? {ok: true}});
             }
             return send(404, {error: {message: 'not found'}});
         });
     });
-    return {server, seen, accounts, authConfigs};
+    return {server, seen, accounts, authConfigs, answers};
 }
 
 describe('Google connections (Composio)', () => {
     let s: TestServer;
     let llm: Awaited<ReturnType<typeof fakeProvider>>;
     let fake: ReturnType<typeof fakeComposio>;
+    let answers: Record<string, () => unknown>;
     let owner: Awaited<ReturnType<typeof signup>>;
     let member: Awaited<ReturnType<typeof signup>>;
     let wsId: string;
@@ -92,6 +110,7 @@ describe('Google connections (Composio)', () => {
 
     before(async () => {
         fake = fakeComposio();
+        answers = fake.answers;
         await new Promise<void>((r) => fake.server.listen(0, '127.0.0.1', () => r()));
         config.connectors.composioBaseUrl = `http://127.0.0.1:${(fake.server.address() as AddressInfo).port}`;
         config.connectors.composioKey = '';
@@ -103,6 +122,23 @@ describe('Google connections (Composio)', () => {
             const tools = (req.tools ?? []).map((t) => t.function.name);
             if (/check my email/.test(lastUserText(req)) && tools.includes('gmail_fetch_emails')) {
                 return {toolCalls: [{name: 'gmail_fetch_emails', args: {query: 'Q3'}}]};
+            }
+            if (/write the launch brief/.test(lastUserText(req)) && tools.includes('create_document')) {
+                return {toolCalls: [{name: 'create_document', args: {title: 'Launch brief', subtitle: 'For the team', markdown: '# Launch brief\n\n## Goal\n\nShip on **Tuesday**.\n\n- Demo video\n- Supporters list\n'}}]};
+            }
+            if (/make the launch deck/.test(lastUserText(req)) && tools.includes('create_presentation')) {
+                return {toolCalls: [{name: 'create_presentation', args: {title: 'Launch deck', slides: [
+                    {layout: 'title'},
+                    {layout: 'stats', title: 'Day one, in numbers', stats: [{value: '900', label: 'Upvotes'}, {value: '#1', label: 'Rank'}]},
+                    {layout: 'chart', title: 'Votes come early', chart: {type: 'bar', categories: ['12-4 AM', '4-8 AM'], series: [{name: 'Votes', values: [550, 160]}]}},
+                    {layout: 'closing', title: 'Next steps', bullets: ['Line up supporters']},
+                ]}}]};
+            }
+            if (/build the budget/.test(lastUserText(req)) && tools.includes('create_spreadsheet')) {
+                return {toolCalls: [{name: 'create_spreadsheet', args: {title: 'Launch budget', sheets: [
+                    {name: 'Budget', columns: [{header: 'Item'}, {header: 'Cost', type: 'currency'}, {header: 'Share', type: 'percent'}], rows: [['Ads', 1200, 0.4], ['Swag', '$300', '10%']], totals: true},
+                    {name: 'Owners', columns: [{header: 'Item'}, {header: 'Owner'}], rows: [['Ads', 'Mia']]},
+                ]}}]};
             }
             if (/email the team/.test(lastUserText(req)) && tools.includes('gmail_send_email')) {
                 return {toolCalls: [{name: 'gmail_send_email', args: {recipient_email: 'team@example.com', subject: 'Q3', body: 'Up 18%.'}}]};
@@ -202,5 +238,94 @@ describe('Google connections (Composio)', () => {
         await owner.api.del(`/workspaces/${wsId}/connections/gmail`);
         assert.equal((await owner.api.get(`/workspaces/${wsId}/connections`)).apps[0].status, 'not_connected');
         assert.equal(fake.accounts.length, 0);
+    });
+
+    const reply = async (message: string) => {
+        const {post, run} = await ask(message);
+        assert.equal(run.status, 'succeeded', run.error ?? '');
+        const thread: Post[] = await owner.api.get(`/posts/${post.id}/thread`);
+        type WithFiles = Post & {rootId: string | null; files: {id: string; name: string; mime: string; url: string; props: Record<string, any>}[]};
+        return (thread as WithFiles[]).find((p) => p.files?.length)!;
+    };
+    const executed = (slug: string) => fake.seen.filter((x) => x.path === `/tools/execute/${slug}`);
+
+    it('without Google, a document is a Word file and a PDF, and nothing goes to Composio', async () => {
+        const before = fake.seen.filter((x) => x.path.startsWith('/tools/execute/')).length;
+        const post = await reply('@writer write the launch brief');
+        assert.deepEqual(post.files.map((f) => f.name), ['Launch brief.docx', 'Launch brief.pdf']);
+        const [docx, pdf] = post.files;
+        assert.equal(docx.props.made, 'document');
+        assert.ok(docx.props.words > 5);
+        assert.equal(docx.props.pdf, pdf.id);
+        assert.equal(pdf.props.copyOf, docx.id);
+        assert.equal(docx.props.google, undefined);
+        const bytes = Buffer.from(await (await fetch(`${s.base}${docx.url}`)).arrayBuffer());
+        assert.equal(bytes.subarray(0, 2).toString(), 'PK', 'a real .docx (a zip)');
+        assert.match((await (await fetch(`${s.base}${pdf.url}`)).text()).slice(0, 8), /^%PDF/);
+        assert.equal(fake.seen.filter((x) => x.path.startsWith('/tools/execute/')).length, before);
+    });
+
+    it('with Google Docs and Drive connected, it is also a Google Doc, in Captain › the chat', async () => {
+        for (const app of ['googledocs', 'googledrive', 'googleslides', 'googlesheets']) {
+            await owner.api.post(`/workspaces/${wsId}/connections/${app}`, {});
+        }
+        fake.accounts.forEach((a) => (a.status = 'ACTIVE'));
+        const chatName = (await owner.api.get(`/workspaces/${wsId}/channels`)).channels[0].displayName;
+        const post = await reply('@writer write the launch brief');
+        const docx = post.files.find((f) => f.name.endsWith('.docx'))!;
+        const doc = executed('GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN').at(-1)!;
+        assert.equal(doc.body.user_id, `${ownerId}:${wsId}`);
+        assert.equal(doc.body.arguments.title, 'Launch brief');
+        assert.match(doc.body.arguments.markdown_text, /^# Launch brief\n/);
+        const folders = executed('GOOGLEDRIVE_CREATE_FOLDER').map((x) => x.body.arguments);
+        assert.equal(folders.length, 2);
+        assert.deepEqual(folders[0], {folder_name: 'Captain'});
+        assert.equal(folders[1].folder_name, chatName);
+        assert.match(folders[1].parent_id, /^folder_/);
+        const move = executed('GOOGLEDRIVE_MOVE_FILE').at(-1)!.body.arguments;
+        assert.match(move.file_id, /^doc_/);
+        assert.match(move.add_parents, /^folder_/);
+        assert.notEqual(move.add_parents, folders[1].parent_id, 'into the chat\'s folder, inside "Captain"');
+        assert.equal(move.remove_parents, 'root');
+        assert.equal(docx.props.google.app, 'docs');
+        assert.equal(docx.props.google.url, `https://docs.google.com/document/d/${move.file_id}/edit`);
+        assert.equal(docx.props.google.folder, `Captain › ${chatName}`);
+        assert.ok(!(await owner.api.get(`/posts/${post.rootId ?? post.id}/thread`) as Post[]).some((p) => p.type === 'decision'), 'a new private file needs no approval');
+    });
+
+    it('decks and spreadsheets: PowerPoint and Excel, plus Google Slides and Sheets, in the same folder', async () => {
+        const deck = await reply('@analyst make the launch deck');
+        assert.equal(deck.files.length, 1);
+        assert.equal(deck.files[0].name, 'Launch deck.pptx');
+        assert.equal(deck.files[0].props.slides, 4);
+        assert.match(deck.files[0].props.google.url, /^https:\/\/docs\.google\.com\/presentation\/d\/pres_/);
+        const md = executed('GOOGLESLIDES_CREATE_SLIDES_MARKDOWN').at(-1)!.body.arguments.markdown_text;
+        assert.match(md, /# Day one, in numbers[\s\S]*\*\*900\*\* Upvotes[\s\S]*---/);
+        assert.equal(executed('GOOGLEDRIVE_CREATE_FOLDER').length, 2, 'the folders are made once');
+
+        const sheet = await reply('@analyst build the budget');
+        assert.equal(sheet.files[0].name, 'Launch budget.xlsx');
+        assert.deepEqual([sheet.files[0].props.sheets, sheet.files[0].props.rows], [2, 3]);
+        const id = sheet.files[0].props.google.id;
+        assert.match(id, /^sheet_/);
+        const tab = executed('GOOGLESHEETS_ADD_SHEET').at(-1)!.body.arguments;
+        assert.deepEqual(tab, {spreadsheet_id: id, properties: {title: 'Owners'}});
+        const [first, second] = executed('GOOGLESHEETS_VALUES_UPDATE').slice(-2).map((x) => x.body.arguments);
+        assert.equal(first.range, 'A1');
+        assert.equal(first.value_input_option, 'USER_ENTERED');
+        assert.deepEqual(first.values.slice(2), [['Item', 'Cost', 'Share'], ['Ads', '$1,200.00', '40%'], ['Swag', '$300.00', '10%'], ['Total', '=SUM(B4:B5)', '']]);
+        assert.equal(second.range, '\'Owners\'!A1');
+    });
+
+    it('if Google says no, the Office file is still there', async () => {
+        const before = {...answers};
+        answers.GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN = () => null;
+        try {
+            const post = await reply('@writer write the launch brief');
+            assert.equal(post.files[0].name, 'Launch brief.docx');
+            assert.equal(post.files[0].props.google, undefined);
+        } finally {
+            Object.assign(answers, before);
+        }
     });
 });
