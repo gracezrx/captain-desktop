@@ -122,7 +122,7 @@ export class Orchestrator {
             return;
         }
         const state = run.status === 'succeeded' ? 'done' : run.status === 'failed' || run.status === 'cancelled' ? null : 'looking';
-        await agentWorking(this.ctx, agent.userId, run.triggerPostId, state);
+        await agentWorking(this.ctx, agent.userId, run.triggerPostId, state, run.id);
     }
 
     private async say(run: RunRow, agent: AgentRow, message: string, rootId: string | null, props: Record<string, unknown> = {}): Promise<string | null> {
@@ -141,6 +141,8 @@ export class Orchestrator {
         }
         const run = await updateRun(this.ctx.sql, runId, {status: 'failed', error: error.slice(0, 1000)});
         await this.ctx.sql`update run_steps set status = 'cancelled', finished_at = ${now()} where run_id = ${runId} and status in ('pending', 'running', 'waiting_approval')`;
+        const expired = await this.ctx.sql`update approvals set status = 'expired', decided_at = ${now()} where run_id = ${runId} and status = 'pending' returning id, post_id`;
+        await this.markExpired(expired.map((r) => ({id: r.id as string, postId: r.postId as string | null})), false);
         if (loaded.channelOk) {
             await this.say(run, loaded.captain, 'Sorry, I couldn\'t finish this one. Try asking again.', run.rootPostId, {error: error.slice(0, 300)}).catch(() => undefined);
         }
@@ -561,24 +563,18 @@ export class Orchestrator {
                 throw notFound('Run');
             }
             if (TERMINAL_RUN.includes(run.status)) {
-                return {run, expired: [] as {id: string; postId: string | null}[]};
+                return {run, expired: [] as {id: string; postId: string | null}[], ended: true};
             }
             const t0 = now();
             await t`update run_steps set status = 'cancelled', finished_at = ${t0} where run_id = ${runId} and status in ('pending', 'running', 'waiting_approval')`;
             const expired = await t`update approvals set status = 'expired', decided_at = ${t0} where run_id = ${runId} and status = 'pending' returning id, post_id`;
             const updated = await updateRun(t, runId, {status: 'cancelled'});
-            return {run: updated, expired: expired.map((r) => ({id: r.id as string, postId: r.postId as string | null}))};
+            return {run: updated, expired: expired.map((r) => ({id: r.id as string, postId: r.postId as string | null})), ended: false};
         });
-        for (const e of result.expired) {
-            if (e.postId) {
-                const post = await getPost(this.ctx.sql, e.postId);
-                const card = post?.props.decision;
-                if (card) {
-                    const row = await mergePostProps(this.ctx.sql, e.postId, {decision: {...card, status: 'expired', ...(reason === 'timeout' ? {timedOut: true} : {})}});
-                    await postEdited(this.ctx, this.ctx.sql, row);
-                }
-            }
+        if (result.ended) {
+            return result.run;
         }
+        await this.markExpired(result.expired, reason === 'timeout');
         audit(this.ctx.sql, {workspaceId: result.run.workspaceId, userId, action: reason === 'timeout' ? 'run_expired' : 'run_cancelled', target: runId});
         await this.publishRun(result.run);
         return result.run;
@@ -592,9 +588,10 @@ export class Orchestrator {
     async sweepDecisions(at = now()): Promise<void> {
         const DAY = 86_400_000;
         const due = await this.ctx.sql`
-            update approvals set reminded_at = ${at}
-            where status = 'pending' and reminded_at is null and created_at < ${at - DAY} and created_at >= ${at - DECISION_DAYS * DAY}
-            returning id, run_id, post_id, requested_by, title, created_at`;
+            update approvals a set reminded_at = ${at}
+            where a.status = 'pending' and a.reminded_at is null and a.created_at < ${at - DAY} and a.created_at >= ${at - DECISION_DAYS * DAY}
+              and exists (select 1 from runs r where r.id = a.run_id and r.status = 'waiting_approval')
+            returning a.id, a.run_id, a.post_id, a.requested_by, a.title, a.created_at`;
         for (const a of due) {
             try {
                 const [loaded, person, post] = await Promise.all([
@@ -611,9 +608,35 @@ export class Orchestrator {
                 log.warn({err: (err as Error).message, approvalId: a.id}, 'couldn\'t send a decision reminder');
             }
         }
-        const stale = await this.ctx.sql`select distinct run_id from approvals where status = 'pending' and run_id is not null and created_at < ${at - DECISION_DAYS * DAY}`;
-        for (const r of stale) {
+        const cutoff = at - DECISION_DAYS * DAY;
+        // Work still waiting on an old decision stops, and the decision expires with it.
+        const waiting = await this.ctx.sql`
+            select distinct a.run_id from approvals a join runs r on r.id = a.run_id
+            where a.status = 'pending' and a.created_at < ${cutoff} and r.status not in ('succeeded', 'failed', 'cancelled')`;
+        for (const r of waiting) {
             await this.cancel(r.runId as string, null, 'timeout').catch((err) => log.warn({err: (err as Error).message}, 'couldn\'t expire a decision'));
+        }
+        // Old decisions whose work already ended just expire.
+        const orphans = await this.ctx.sql`
+            update approvals a set status = 'expired', decided_at = ${at}
+            where a.status = 'pending' and a.created_at < ${cutoff}
+              and not exists (select 1 from runs r where r.id = a.run_id and r.status not in ('succeeded', 'failed', 'cancelled'))
+            returning a.id, a.post_id`;
+        await this.markExpired(orphans.map((r) => ({id: r.id as string, postId: r.postId as string | null})), true);
+    }
+
+    // Show expired decisions as expired on their cards.
+    private async markExpired(list: {id: string; postId: string | null}[], timedOut: boolean): Promise<void> {
+        for (const e of list) {
+            if (!e.postId) {
+                continue;
+            }
+            const post = await getPost(this.ctx.sql, e.postId);
+            const card = post?.props.decision;
+            if (card) {
+                const row = await mergePostProps(this.ctx.sql, e.postId, {decision: {...card, status: 'expired', ...(timedOut ? {timedOut: true} : {})}});
+                await postEdited(this.ctx, this.ctx.sql, row);
+            }
         }
     }
 }

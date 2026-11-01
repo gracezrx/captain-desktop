@@ -90,6 +90,14 @@ describe('home dashboard', () => {
         const general = home.byChat.find((c) => c.channelId === generalId)!;
         assert.ok(general.tokens >= 1500, 'the chat the work was for');
         assert.ok(home.byChat.some((c) => c.name === 'Founders' && c.tokens > 0), 'admins see every chat on Home');
+        // An admin who isn't in a private chat sees its tokens, not its name.
+        await owner.api.patch(`/workspaces/${wsId}/members/${member.session.user.id}`, {role: 'admin'});
+        const asAdmin = (await dash(member.api)).usage as typeof home;
+        const hidden = asAdmin.byChat.find((c) => c.channelId === home.byChat.find((x) => x.name === 'Founders')!.channelId)!;
+        assert.equal(hidden.name, '');
+        assert.ok(hidden.tokens > 0);
+        assert.equal(asAdmin.byChat.find((c) => c.channelId === generalId)!.name, 'General');
+        await owner.api.patch(`/workspaces/${wsId}/members/${member.session.user.id}`, {role: 'member'});
 
         type ChatUsage = {month: {tokensIn: number; tokensOut: number; usd: number; calls: number}; byAgent: {agentId: string; tokens: number; usd: number}[]; showsUsd: boolean};
         const forOwner: ChatUsage = await owner.api.get(`/channels/${generalId}/usage?tz=240`);

@@ -202,7 +202,7 @@ async function reactionsChanged(ctx: Ctx, channelId: string, postId: string): Pr
 // An agent's reaction on the message it's working on: Looking while it
 // works, turned into Done (in the same place) when it finishes, gone if it
 // stops. Agents use only these two; their reactions notify nobody.
-export async function agentWorking(ctx: Ctx, agentUserId: string, postId: string, state: 'looking' | 'done' | null): Promise<void> {
+export async function agentWorking(ctx: Ctx, agentUserId: string, postId: string, state: 'looking' | 'done' | null, runId: string): Promise<void> {
     const post = await getPost(ctx.sql, postId);
     if (!post || post.deletedAt) {
         return;
@@ -211,7 +211,12 @@ export async function agentWorking(ctx: Ctx, agentUserId: string, postId: string
     if (state === 'looking') {
         const has = await ctx.sql`select 1 from reactions where post_id = ${postId} and user_id = ${agentUserId} and emoji in ('looking', 'done')`;
         if (!has.length) {
-            changed = await ctx.sql`insert into reactions (post_id, user_id, emoji, created_at) values (${postId}, ${agentUserId}, 'looking', ${now()}) on conflict do nothing returning 1`;
+            // Only while the work is still going (a late update must not put it back).
+            changed = await ctx.sql`
+                insert into reactions (post_id, user_id, emoji, created_at)
+                select ${postId}, ${agentUserId}, 'looking', ${now()}
+                where exists (select 1 from runs where id = ${runId} and status not in ('succeeded', 'failed', 'cancelled'))
+                on conflict do nothing returning 1`;
         }
     } else if (state === 'done') {
         changed = await ctx.sql`

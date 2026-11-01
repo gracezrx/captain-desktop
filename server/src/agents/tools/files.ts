@@ -86,10 +86,14 @@ export const createDocument: Tool = {
         const ids = [docx.id];
         let pdfNote = '';
         if (pdfCanDraw(`${title} ${subtitle ?? ''} ${markdown}`)) {
-            const pdf = await store(tc, `${stem}.pdf`, MIME.pdf, await makePdf(meta, body), {made: 'document', words, copyOf: docx.id});
-            ids.push(pdf.id);
-            await updateFileProps(tc.ctx.sql, docx.id, {pdf: pdf.id});
-            pdfNote = ' and a PDF copy';
+            try {
+                const pdf = await store(tc, `${stem}.pdf`, MIME.pdf, await makePdf(meta, body), {made: 'document', words, copyOf: docx.id});
+                ids.push(pdf.id);
+                await updateFileProps(tc.ctx.sql, docx.id, {pdf: pdf.id});
+                pdfNote = ' and a PDF copy';
+            } catch (err) {
+                log.warn({err: (err as Error).message}, 'couldn\'t make the PDF copy; the Word file is attached');
+            }
         }
 
         const g = await googleFor(tc.ctx, tc.requester, tc.channel.workspaceId);

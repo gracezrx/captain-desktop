@@ -166,34 +166,55 @@ describe('MCP servers', () => {
         config.connectors.mcpAllowPrivate = true;
     });
 
-    it('a server that wants a sign-in: Captain finds how, registers, and hands back the page to open', async () => {
+    // Captain's start page: shows the account, then hands the browser a cookie and the sign-in page.
+    const startSignIn = async (startUrl: string) => {
+        const confirm = await (await fetch(startUrl)).text();
+        const go = await fetch(`${startUrl}&go=1`, {redirect: 'manual'});
+        assert.equal(go.status, 303);
+        const cookie = (go.headers.get('set-cookie') ?? '').split(';')[0];
+        const sign = new URL(go.headers.get('location')!);
+        fake.state.challenge = sign.searchParams.get('code_challenge')!;
+        return {confirm, cookie, sign, state: sign.searchParams.get('state')!};
+    };
+    const callback = (state: string, cookie: string | null) => fetch(`${s.base}/mcp/oauth/callback?code=code-ok&state=${encodeURIComponent(state)}`, {headers: cookie ? {cookie} : {}}).then((r) => r.text());
+    let pending: Awaited<ReturnType<typeof startSignIn>>;
+
+    it('a server that wants a sign-in: Captain finds how, registers, and opens its own start page', async () => {
         const res = await owner.api.post(`/workspaces/${wsId}/mcp`, {url: `${base}/mcp?key=secret`, name: 'Notes'});
         assert.equal(res.server.status, 'needs_sign_in');
         assert.equal(res.server.authMode, 'oauth');
         assert.equal(res.server.url, `${base}/mcp`, 'shown without its query string');
-        const sign = new URL(res.signInUrl);
-        assert.equal(sign.origin + sign.pathname, `${base}/authorize`);
-        assert.equal(sign.searchParams.get('client_id'), 'client-1');
-        assert.equal(sign.searchParams.get('redirect_uri'), `${s.base}/mcp/oauth/callback`);
-        assert.equal(sign.searchParams.get('code_challenge_method'), 'S256');
-        assert.equal(sign.searchParams.get('scope'), 'mcp');
-        assert.equal(sign.searchParams.get('resource'), `${base}/mcp`, 'the server as its metadata names it');
-        fake.state.challenge = sign.searchParams.get('code_challenge')!;
+        assert.match(res.signInUrl, new RegExp(`^${s.base}/mcp/oauth/start\\?t=`));
+        pending = await startSignIn(res.signInUrl);
+        assert.match(pending.confirm, /Connect Notes to Captain/);
+        assert.match(pending.confirm, /Grace/, 'it says which Captain account this connects');
+        assert.match(pending.cookie, /^captain_mcp_\w+=/);
+        assert.equal(pending.sign.origin + pending.sign.pathname, `${base}/authorize`);
+        assert.equal(pending.sign.searchParams.get('client_id'), 'client-1');
+        assert.equal(pending.sign.searchParams.get('redirect_uri'), `${s.base}/mcp/oauth/callback`);
+        assert.equal(pending.sign.searchParams.get('code_challenge_method'), 'S256');
+        assert.equal(pending.sign.searchParams.get('scope'), 'mcp');
+        assert.equal(pending.sign.searchParams.get('resource'), `${base}/mcp`, 'the server as its metadata names it');
+        assert.match(await (await fetch(`${res.signInUrl}&go=1`)).text(), /expired/, 'the start link works once');
         notes = res.server;
-        (notes as Server & {state: string}).state = sign.searchParams.get('state')!;
     });
 
-    it('signing in finishes on Captain\'s page, once; a forged or reused link does nothing', async () => {
-        const state = (notes as Server & {state: string}).state;
-        const forged = await (await fetch(`${s.base}/mcp/oauth/callback?code=code-ok&state=${encodeURIComponent(state.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A')))}`)).text();
+    it('a sign-in only finishes in the browser Captain opened, once; a forged link does nothing', async () => {
+        const forged = await callback(pending.state.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A')), pending.cookie);
         assert.match(forged, /expired/);
-        const page = await (await fetch(`${s.base}/mcp/oauth/callback?code=code-ok&state=${encodeURIComponent(state)}`)).text();
-        assert.match(page, /Notes is connected/);
-        const again = await (await fetch(`${s.base}/mcp/oauth/callback?code=code-ok&state=${encodeURIComponent(state)}`)).text();
-        assert.match(again, /already used/);
+        // Someone else's browser (no cookie): refused, and that sign-in is spent.
+        assert.match(await callback(pending.state, null), /Finish signing in in the browser Captain opened/);
+        assert.match(await callback(pending.state, pending.cookie), /already used/);
+        assert.equal((await owner.api.get(`/workspaces/${wsId}/mcp`)).servers[0].status, 'needs_sign_in');
+
+        const {url} = await owner.api.post(`/workspaces/${wsId}/mcp/${notes.id}/sign-in`);
+        pending = await startSignIn(url);
+        assert.equal(fake.state.registered, 1, 'registered once');
+        assert.match(await callback(pending.state, pending.cookie), /Notes is connected/);
+        assert.match(await callback(pending.state, pending.cookie), /already used/);
         const [server]: Server[] = (await owner.api.get(`/workspaces/${wsId}/mcp`)).servers;
         assert.equal(server.status, 'connected');
-        assert.deepEqual(server.tools, [{name: 'query_meetings', reads: true}, {name: 'list_meetings', reads: true}, {name: 'create_note', reads: false}]);
+        assert.deepEqual(server.tools, [{name: 'query_meetings', reads: true}, {name: 'list_meetings', reads: false}, {name: 'create_note', reads: false}], 'only tools the server marks read-only run without asking');
         assert.ok(!JSON.stringify(server).includes('tok-1'), 'no token material comes back');
     });
 
@@ -244,6 +265,12 @@ describe('MCP servers', () => {
         assert.equal(right.server.status, 'connected');
         const {thread} = await ask(owner.api, '@researcher which tools do you have?');
         assert.match(thread.at(-1)!.message, /mcp_keyed_query_meetings/);
+    });
+
+    it('a second server with the same name gets a name of its own (its tools are named after it)', async () => {
+        const res = await owner.api.post(`/workspaces/${wsId}/mcp`, {url: `${base}/keyed?second=1`, token: 'k1', authHeader: 'X-Api-Key', name: 'Keyed'});
+        assert.equal(res.server.name, 'Keyed 2');
+        await owner.api.del(`/workspaces/${wsId}/mcp/${res.server.id}`);
     });
 
     it('switching one off and removing it', async () => {

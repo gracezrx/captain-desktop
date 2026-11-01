@@ -65,7 +65,7 @@ const totals = (r: Record<string, unknown>, k: string): TokenTotals => ({
     tokensIn: Number(r[`${k}In`] ?? 0), tokensOut: Number(r[`${k}Out`] ?? 0), usd: Number(r[`${k}Usd`] ?? 0), calls: Number(r[`${k}Calls`] ?? 0),
 });
 
-export async function usageOverview(db: Db, workspaceId: string, budgetUsd: number | null, offsetMin: number, at = Date.now()): Promise<DashboardUsage> {
+export async function usageOverview(db: Db, workspaceId: string, budgetUsd: number | null, offsetMin: number, at = Date.now(), viewerId: string | null = null): Promise<DashboardUsage> {
     const today = localDayStart(at, offsetMin);
     const week = today - 6 * DAY;
     const month = monthStart(at);
@@ -96,7 +96,9 @@ export async function usageOverview(db: Db, workspaceId: string, budgetUsd: numb
         select agent_id, coalesce(sum(tokens_in + tokens_out), 0)::bigint as tokens, coalesce(sum(cost_usd), 0)::float8 as usd
         from usage_events where workspace_id = ${workspaceId} and created_at >= ${month}
         group by agent_id order by tokens desc`, db`
-        select u.channel_id, c.display_name, c.type, coalesce(sum(u.tokens_in + u.tokens_out), 0)::bigint as tokens, coalesce(sum(u.cost_usd), 0)::float8 as usd
+        select u.channel_id, c.type, coalesce(sum(u.tokens_in + u.tokens_out), 0)::bigint as tokens, coalesce(sum(u.cost_usd), 0)::float8 as usd,
+               -- the name only of chats the viewer can see
+               case when c.type = 'O' or exists (select 1 from channel_members m where m.channel_id = u.channel_id and m.user_id = ${viewerId}) then c.display_name else '' end as display_name
         from usage_events u join channels c on c.id = u.channel_id
         where u.workspace_id = ${workspaceId} and u.created_at >= ${month}
         group by u.channel_id, c.display_name, c.type order by tokens desc limit 12`]);

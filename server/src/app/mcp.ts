@@ -7,12 +7,14 @@ import {z} from 'zod';
 
 import {McpError, checkMcpUrl, displayUrl} from '../connectors/mcp/net.js';
 import {MCP_PRESETS, presetFor} from '../connectors/mcp/presets.js';
-import {finishSignIn, startSignIn, verify} from '../connectors/mcp/service.js';
-import {readsOnly} from '../connectors/mcp/tools.js';
+import {browserCookie, finishSignIn, openStart, startSignIn, verify} from '../connectors/mcp/service.js';
+import {config} from '../config.js';
+import {readsOnly, serverSlug} from '../connectors/mcp/tools.js';
 import type {McpConnections, McpServerInfo} from '../shared/types.js';
 import {audit} from '../store/audit.js';
 import {deleteMcp, getMcp, insertMcp, listMcp, type McpRow, updateMcp} from '../store/mcp.js';
-import type {UserRow} from '../store/users.js';
+import {getUser, type UserRow} from '../store/users.js';
+import {getWorkspace} from '../store/workspaces.js';
 import {encryptSecret} from '../util/crypto.js';
 import {badRequest, notFound} from '../util/errors.js';
 
@@ -25,7 +27,7 @@ const RESERVED_HEADERS = new Set(['authorization', 'host', 'content-type', 'cont
 export function serverInfo(r: McpRow): McpServerInfo {
     return {
         id: r.id, preset: r.preset, name: r.name, url: displayUrl(r.url), status: r.status, lastError: r.lastError, authMode: r.authMode,
-        tools: r.tools.map((t) => ({name: t.name, reads: readsOnly(t)})), enabled: r.enabled, verifiedAt: r.verifiedAt,
+        tools: r.tools.map((t) => ({name: t.name, reads: readsOnly(t, r.preset)})), enabled: r.enabled, verifiedAt: r.verifiedAt,
     };
 }
 
@@ -84,15 +86,22 @@ export async function addServer(ctx: Ctx, user: UserRow, workspaceId: string, bo
             throw badRequest(`You can connect up to ${MAX_SERVERS} MCP servers in a workspace.`);
         }
         const known = preset ?? presetFor(url);
+        // A name of its own among yours: its tools are named after it.
+        const base = input.name || known?.name || new URL(url).hostname.replace(/^(mcp|api|www)\./, '');
+        const slugs = new Set(existing.map((r) => serverSlug(r)));
+        let name = base;
+        for (let i = 2; slugs.has(serverSlug({name})); i++) {
+            name = `${base} ${i}`;
+        }
         row = await insertMcp(ctx.sql, {
             workspaceId, userId: user.id, preset: known?.id ?? null,
-            name: input.name || known?.name || new URL(url).hostname.replace(/^(mcp|api|www)\./, ''),
+            name,
             url, authMode: input.token ? 'token' : 'none', authHeader: input.token ? input.authHeader ?? null : null,
             token: input.token ? encryptSecret(input.token) : null,
         });
         audit(ctx.sql, {workspaceId, userId: user.id, action: 'mcp_connected', target: row.id, meta: {url: displayUrl(url)}});
     } else if (input.token) {
-        row = await updateMcp(ctx.sql, row.id, {authMode: 'token', token: encryptSecret(input.token), refreshToken: null});
+        row = await updateMcp(ctx.sql, row.id, {authMode: 'token', authHeader: input.authHeader ?? null, token: encryptSecret(input.token), refreshToken: null});
     }
     row = await verify(ctx, row);
     let signInUrl: string | null = null;
@@ -134,15 +143,51 @@ export async function removeServer(ctx: Ctx, user: UserRow, workspaceId: string,
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
+function page(title: string, body: string): string {
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>${title}</title>
+<style>:root{color-scheme:light dark}body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 -apple-system,system-ui,sans-serif;background:#f5f7fb;color:#1b2540}
+main{max-width:460px;padding:32px;text-align:center}h1{font-size:22px;margin:0 0 8px}p{margin:0 0 10px;color:#56627a}b{color:inherit}
+a.go{display:inline-block;margin-top:14px;padding:10px 20px;border-radius:999px;background:#3a6fd8;color:#fff;font-weight:700;text-decoration:none}
+@media (prefers-color-scheme:dark){body{background:#12161f;color:#e8ecf5}p{color:#a3adc2}a.go{background:#7fa6ff;color:#0f1a3d}}</style></head>
+<body><main>${body}</main></body></html>`;
+}
+
+export function parseCookies(header: string | undefined): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const part of (header ?? '').split(';')) {
+        const i = part.indexOf('=');
+        if (i > 0) {
+            out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+        }
+    }
+    return out;
+}
+
+// Captain's sign-in start page (see connectors/mcp/service.ts startSignIn).
+export async function startPage(ctx: Ctx, query: Record<string, unknown>): Promise<{html?: string; redirect?: string; cookie?: string}> {
+    const ticket = typeof query.t === 'string' ? query.t : '';
+    const r = await openStart(ctx, ticket, query.go === '1');
+    if (r.kind === 'gone') {
+        return {html: page('This sign-in link has expired', '<h1>This sign-in link has expired</h1><p>Start again from Captain → Settings → Connections.</p>')};
+    }
+    if (r.kind === 'go') {
+        const secure = config.publicUrl.startsWith('https:') ? '; Secure' : '';
+        return {redirect: r.location, cookie: `${browserCookie(r.row.id)}=${r.cookie}; Path=/mcp/oauth; HttpOnly; SameSite=Lax; Max-Age=600${secure}`};
+    }
+    const [user, ws] = await Promise.all([getUser(ctx.sql, r.row.userId), getWorkspace(ctx.sql, r.row.workspaceId)]);
+    const who = user ? `${esc(user.displayName)}${user.email ? ` (${esc(user.email)})` : ''}` : 'a Captain account';
+    const name = esc(r.row.name);
+    return {html: page(`Connect ${name} to Captain`, `<h1>Connect ${name} to Captain</h1>
+<p>This connects your ${name} to <b>${who}</b>${ws ? ` in <b>${esc(ws.name)}</b>` : ''}, so agents working for that account can use it.</p>
+<p>If that isn't your Captain account, close this page.</p>
+<a class="go" href="/mcp/oauth/start?t=${encodeURIComponent(ticket)}&amp;go=1">Continue to ${name}</a>`)};
+}
+
 // Where a server's sign-in sends the browser back.
-export async function callbackPage(ctx: Ctx, query: Record<string, unknown>): Promise<string> {
-    const r = await finishSignIn(ctx, query);
+export async function callbackPage(ctx: Ctx, query: Record<string, unknown>, cookieHeader: string | undefined): Promise<string> {
+    const r = await finishSignIn(ctx, query, parseCookies(cookieHeader));
     const name = esc(r.name.slice(0, 60));
     const title = r.ok ? `${name} is connected` : `${name} didn't connect`;
     const line = r.ok ? 'You can close this tab and go back to Captain. Agents working for you can use it now.' : esc(r.reason ?? 'Try again from Captain → Settings → Connections.');
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
-<style>:root{color-scheme:light dark}body{margin:0;min-height:100vh;display:grid;place-items:center;font:15px/1.5 -apple-system,system-ui,sans-serif;background:#f5f7fb;color:#1b2540}
-main{max-width:440px;padding:32px;text-align:center}h1{font-size:22px;margin:0 0 8px}p{margin:0;color:#56627a}
-@media (prefers-color-scheme:dark){body{background:#12161f;color:#e8ecf5}p{color:#a3adc2}}</style></head>
-<body><main><h1>${title}</h1><p>${line}</p></main></body></html>`;
+    return page(title, `<h1>${title}</h1><p>${line}</p>`);
 }

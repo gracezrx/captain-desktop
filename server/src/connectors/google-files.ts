@@ -228,6 +228,10 @@ function typed(v: string | number | boolean | null | undefined, type: ColumnType
     if (x === null || x === undefined) {
         return '';
     }
+    // Text that Sheets would run as a formula (=IMPORTDATA(…), +, -, @) stays text.
+    if (typeof x === 'string' && /^[=+\-@\t\r]/.test(x)) {
+        return `'${x}`;
+    }
     if (x instanceof Date) {
         return x.toISOString().slice(0, 10);
     }
@@ -246,12 +250,13 @@ function typed(v: string | number | boolean | null | undefined, type: ColumnType
 // numbers, the totals row is real formulas), starting at row `top`.
 export function sheetValues(spec: SheetSpec, top: number): (string | number | boolean)[][] {
     const cols = spec.columns.slice(0, 50);
-    const out: (string | number | boolean)[][] = [[spec.title ?? spec.name]];
+    const text = (s: string) => typed(s, 'text');
+    const out: (string | number | boolean)[][] = [[text(spec.title ?? spec.name)]];
     if (spec.note) {
-        out.push([spec.note]);
+        out.push([text(spec.note)]);
     }
     out.push([]);
-    out.push(cols.map((c) => c.header));
+    out.push(cols.map((c) => text(c.header)));
     const first = top + out.length;
     const rows = spec.rows.slice(0, 5000);
     for (const r of rows) {

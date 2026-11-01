@@ -2,11 +2,12 @@
 // out, and once more if the server says no), checking it and reading its
 // tools, and starting and finishing a sign-in.
 
-import {createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
+import {createHash, createHmac, randomBytes, timingSafeEqual} from 'node:crypto';
 
 import type {Ctx} from '../../app/context.js';
 import {config} from '../../config.js';
-import {getMcp, type McpOAuthState, type McpRow, takePending, updateMcp} from '../../store/mcp.js';
+import {tx} from '../../db/index.js';
+import {byTicket, claimTicket, getMcp, type McpOAuthState, type McpRow, takePending, updateMcp} from '../../store/mcp.js';
 import {decryptSecret, encryptSecret} from '../../util/crypto.js';
 import {log} from '../../util/log.js';
 
@@ -26,31 +27,56 @@ function clientOf(o: McpOAuthState): OAuthClient | null {
     return {...o.client, clientSecret: o.client.clientSecret ? decryptSecret(o.client.clientSecret) : null};
 }
 
-// The token to call the server with, refreshed first if it's about to expire.
+// The token to call the server with, refreshed first if it's about to
+// expire (or the server just said no). One refresh at a time per
+// connection, across servers: many sign-in servers hand out a new refresh
+// token each time and refuse the old one, so a second refresh racing the
+// first would sign the person out.
 async function tokenFor(ctx: Ctx, row: McpRow, force = false): Promise<{row: McpRow; token: string | null}> {
+    const plain = (r: McpRow) => ({row: r, token: r.token ? decryptSecret(r.token) : null});
     if (row.authMode !== 'oauth') {
-        return {row, token: row.token ? decryptSecret(row.token) : null};
+        return plain(row);
     }
     const expiring = row.oauth.expiresAt ? row.oauth.expiresAt - Date.now() < 60_000 : false;
-    if ((force || expiring) && row.refreshToken && row.oauth.meta) {
-        const client = clientOf(row.oauth);
-        const old = decryptSecret(row.refreshToken);
-        if (client && old) {
-            try {
-                const t = await refresh(row.oauth.meta, client, old);
-                row = await updateMcp(ctx.sql, row.id, {
-                    token: encryptSecret(t.accessToken), refreshToken: t.refreshToken ? encryptSecret(t.refreshToken) : row.refreshToken,
-                    oauth: {...row.oauth, expiresAt: t.expiresAt},
-                });
-                return {row, token: t.accessToken};
-            } catch (err) {
-                log.warn({err: (err as Error).message, server: row.name}, 'MCP token refresh failed');
-                row = await updateMcp(ctx.sql, row.id, {status: 'needs_sign_in', lastError: 'Sign-in expired. Sign in again.'});
-                throw new McpError(`${row.name} needs you to sign in again.`, 401);
-            }
-        }
+    if (!(force || expiring) || !row.refreshToken || !row.oauth.meta) {
+        return plain(row);
     }
-    return {row, token: row.token ? decryptSecret(row.token) : null};
+    const outcome = await tx(ctx.sql, async (t) => {
+        await t`select pg_advisory_xact_lock(hashtext(${`mcp-refresh:${row.id}`}))`;
+        const current = await getMcp(t, row.id);
+        if (!current) {
+            throw new McpError('This connection was removed.');
+        }
+        if (current.token !== row.token) {
+            return {kind: 'ok' as const, ...plain(current)}; // refreshed meanwhile
+        }
+        const client = clientOf(current.oauth);
+        const old = current.refreshToken ? decryptSecret(current.refreshToken) : null;
+        if (!client || !old || !current.oauth.meta) {
+            return {kind: 'ok' as const, ...plain(current)};
+        }
+        try {
+            const fresh = await refresh(current.oauth.meta, client, old);
+            const saved = await updateMcp(t, current.id, {
+                token: encryptSecret(fresh.accessToken), refreshToken: fresh.refreshToken ? encryptSecret(fresh.refreshToken) : current.refreshToken,
+                oauth: {...current.oauth, expiresAt: fresh.expiresAt},
+            });
+            return {kind: 'ok' as const, row: saved, token: fresh.accessToken};
+        } catch (err) {
+            const status = err instanceof McpError ? err.status : 0;
+            log.warn({err: (err as Error).message, status, server: current.name}, 'MCP token refresh failed');
+            // Only a refusal signs the person out; a timeout or an outage doesn't.
+            return {kind: status === 400 || status === 401 ? 'signed_out' as const : 'unavailable' as const, row: current, token: null};
+        }
+    });
+    if (outcome.kind === 'signed_out') {
+        await updateMcp(ctx.sql, row.id, {status: 'needs_sign_in', lastError: 'Sign-in expired. Sign in again.'});
+        throw new McpError(`${row.name} needs you to sign in again.`, 401);
+    }
+    if (outcome.kind === 'unavailable') {
+        throw new McpError(`${row.name}'s sign-in server isn't answering right now. Try again in a minute.`);
+    }
+    return {row: outcome.row, token: outcome.token};
 }
 
 // Run something against the server: handshake first, and on a 401 refresh
@@ -105,6 +131,12 @@ function signState(payload: Record<string, unknown>): string {
     return `${body}.${createHmac('sha256', stateKey()).update(body).digest('base64url')}`;
 }
 
+function safeEqual(a: string, b: string): boolean {
+    const x = Buffer.from(a);
+    const y = Buffer.from(b);
+    return x.length === y.length && timingSafeEqual(x, y);
+}
+
 function readState(state: string): {c: string; u: string; n: string; e: number} | null {
     const [body, sig] = state.split('.');
     if (!body || !sig) {
@@ -123,7 +155,16 @@ function readState(state: string): {c: string; u: string; n: string; e: number} 
     }
 }
 
-// The page to send the person to, to sign in to this server.
+const hash = (v: string) => createHash('sha256').update(v).digest('base64url');
+
+export const startUrl = (ticket: string) => `${config.publicUrl}/mcp/oauth/start?t=${encodeURIComponent(ticket)}`;
+export const browserCookie = (connectionId: string) => `captain_mcp_${connectionId}`;
+
+// Begin a sign-in: the page to open is Captain's own start page (good once,
+// for ten minutes). It shows which Captain account this connects, then
+// gives the browser a cookie and sends it to the server's sign-in; the
+// sign-in only finishes in a browser with that cookie. So a sign-in link
+// someone else started can't quietly attach your account to theirs.
 export async function startSignIn(ctx: Ctx, row: McpRow): Promise<string> {
     let o = row.oauth;
     if (!o.meta || Date.now() - o.meta.discoveredAt > DISCOVERY_TTL_MS) {
@@ -142,18 +183,49 @@ export async function startSignIn(ctx: Ctx, row: McpRow): Promise<string> {
     }
     const {verifier, challenge} = pkce();
     const nonce = randomBytes(24).toString('base64url');
+    const ticket = randomBytes(24).toString('base64url');
     const expiresAt = Date.now() + SIGN_IN_MINUTES * 60_000;
-    o = {...o, pending: {nonce, verifier: encryptSecret(verifier), expiresAt}};
-    await updateMcp(ctx.sql, row.id, {authMode: 'oauth', oauth: o, token, refreshToken});
     const state = signState({c: row.id, u: row.userId, n: nonce, e: expiresAt});
-    return authorizeUrl(meta, clientOf(o)!, state, challenge);
+    const authorize = authorizeUrl(meta, clientOf(o)!, state, challenge);
+    o = {...o, pending: {nonce, verifier: encryptSecret(verifier), expiresAt, ticket: hash(ticket), browser: null, authorize}};
+    await updateMcp(ctx.sql, row.id, {authMode: 'oauth', oauth: o, token, refreshToken});
+    return startUrl(ticket);
+}
+
+export type StartPage = {kind: 'confirm'; row: McpRow} | {kind: 'go'; row: McpRow; cookie: string; location: string} | {kind: 'gone'};
+
+// Captain's start page: first a look at which account this is for, then
+// (with go) the cookie and the way on to the sign-in server.
+export async function openStart(ctx: Ctx, ticket: string, go: boolean): Promise<StartPage> {
+    const row = ticket ? await byTicket(ctx.sql, hash(ticket)) : null;
+    const p = row?.oauth.pending;
+    if (!row || !p?.authorize || p.expiresAt < Date.now()) {
+        return {kind: 'gone'};
+    }
+    if (!go) {
+        return {kind: 'confirm', row};
+    }
+    const cookie = randomBytes(24).toString('base64url');
+    if (!(await claimTicket(ctx.sql, row.id, hash(ticket), hash(cookie)))) {
+        return {kind: 'gone'};
+    }
+    return {kind: 'go', row, cookie, location: p.authorize};
 }
 
 export type SignInResult = {ok: boolean; name: string; reason?: string};
 
 // The sign-in page sends the browser back here with a code. The state names
 // the connection and the person who started the sign-in, and can be used once.
-export async function finishSignIn(ctx: Ctx, query: {code?: unknown; state?: unknown; error?: unknown}): Promise<SignInResult> {
+export async function finishSignIn(ctx: Ctx, query: {code?: unknown; state?: unknown; error?: unknown}, cookies: Record<string, string>): Promise<SignInResult> {
+    try {
+        return await finish(ctx, query, cookies);
+    } catch (e) {
+        log.warn({err: (e as Error).message}, 'MCP sign-in failed');
+        return {ok: false, name: 'The server', reason: 'The sign-in didn\'t finish. Start again from Captain.'};
+    }
+}
+
+async function finish(ctx: Ctx, query: {code?: unknown; state?: unknown; error?: unknown}, cookies: Record<string, string>): Promise<SignInResult> {
     const state = typeof query.state === 'string' ? readState(query.state) : null;
     if (!state) {
         return {ok: false, name: 'The server', reason: 'This sign-in link has expired. Start again from Captain.'};
@@ -165,6 +237,11 @@ export async function finishSignIn(ctx: Ctx, query: {code?: unknown; state?: unk
     const taken = await takePending(ctx.sql, row.id, state.n);
     if (!taken || taken.pending.expiresAt < Date.now()) {
         return {ok: false, name: row.name, reason: 'This sign-in was already used or has expired. Start again from Captain.'};
+    }
+    const cookie = cookies[browserCookie(row.id)];
+    const want = taken.pending.browser;
+    if (!cookie || !want || !safeEqual(hash(cookie), want)) {
+        return {ok: false, name: row.name, reason: 'Finish signing in in the browser Captain opened. Start again from Captain on your computer.'};
     }
     if (typeof query.error === 'string' || typeof query.code !== 'string' || !query.code) {
         return {ok: false, name: row.name, reason: query.error === 'access_denied' ? 'You didn\'t allow access.' : 'The sign-in didn\'t finish.'};

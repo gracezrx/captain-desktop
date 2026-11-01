@@ -34,7 +34,7 @@ export async function dashboard(ctx: Ctx, user: UserRow, workspaceId: string, of
     const [tokens, steps, usage] = await Promise.all([
         admin ? tokensByRun(ctx.sql, workspaceId, runs.map((r) => r.id)) : new Map<string, number>(),
         Promise.all(runs.map((r) => listSteps(ctx.sql, r.id))),
-        admin ? getWorkspace(ctx.sql, workspaceId).then((ws) => usageOverview(ctx.sql, workspaceId, ws?.monthlyBudgetUsd ?? null, offsetMin, at)) : null,
+        admin ? getWorkspace(ctx.sql, workspaceId).then((ws) => usageOverview(ctx.sql, workspaceId, ws?.monthlyBudgetUsd ?? null, offsetMin, at, user.id)) : null,
     ]);
     const stepsOf = new Map(runs.map((r, i) => [r.id, steps[i]]));
     const shape = (r: RunRow): ActivityRun => {
